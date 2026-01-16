@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'services/meshtastic_service.dart';
 import 'screens/settings_screen.dart';
 import 'screens/chat_screen.dart';
-import 'models/chat_message.dart'; // Para MeshNode
+import 'screens/requests_screen.dart';
+import 'models/chat_message.dart';
 
 void main() {
   runApp(const SiriusPorteriaApp());
@@ -312,8 +313,10 @@ class _MainScreenState extends State<MainScreen> {
       case 0:
         return FormScreen(meshtasticService: _service);
       case 1:
-        return ChatScreen(meshtasticService: _service);
+        return RequestsScreen(meshtasticService: _service);
       case 2:
+        return ChatScreen(meshtasticService: _service);
+      case 3:
         return SettingsScreen(
           meshtasticService: _service,
           onDeviceChange: _navigateToDeviceSelection,
@@ -326,6 +329,8 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final pendingCount = _service.pendingRequestsCount;
+
     return Scaffold(
       body: _buildCurrentPage(),
       bottomNavigationBar: NavigationBar(
@@ -333,18 +338,31 @@ class _MainScreenState extends State<MainScreen> {
         onDestinationSelected: (index) {
           setState(() => _currentIndex = index);
         },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.home_outlined),
-            selectedIcon: Icon(Icons.home),
-            label: 'Formulario',
+        destinations: [
+          const NavigationDestination(
+            icon: Icon(Icons.edit_note_outlined),
+            selectedIcon: Icon(Icons.edit_note),
+            label: 'Registro',
           ),
           NavigationDestination(
+            icon: Badge(
+              label: Text('$pendingCount'),
+              isLabelVisible: pendingCount > 0,
+              child: const Icon(Icons.list_alt_outlined),
+            ),
+            selectedIcon: Badge(
+              label: Text('$pendingCount'),
+              isLabelVisible: pendingCount > 0,
+              child: const Icon(Icons.list_alt),
+            ),
+            label: 'Solicitudes',
+          ),
+          const NavigationDestination(
             icon: Icon(Icons.chat_bubble_outline),
             selectedIcon: Icon(Icons.chat_bubble),
             label: 'Chat',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.settings_outlined),
             selectedIcon: Icon(Icons.settings),
             label: 'Settings',
@@ -376,8 +394,9 @@ class _FormScreenState extends State<FormScreen> {
   String _selectedArea = 'Área 1';
   MeshNode? _selectedNode; // Nodo destino seleccionado
   bool _isSending = false;
-  ApprovalResponse? _approvalResponse;
-  StreamSubscription<ApprovalResponse>? _approvalSubscription;
+  bool _waitingResponse = false;
+  VisitorResponse? _response;
+  StreamSubscription<VisitorResponse>? _responseSubscription;
 
   final List<String> _reasons = ['Motivo 1', 'Motivo 2', 'Motivo 3'];
   final List<String> _areas = ['Área 1', 'Área 2', 'Área 3'];
@@ -388,14 +407,14 @@ class _FormScreenState extends State<FormScreen> {
   void initState() {
     super.initState();
     _service.addListener(_onConnectionChange);
-    _approvalSubscription = _service.approvalStream.listen(_onApproval);
+    _responseSubscription = _service.responseStream.listen(_onResponse);
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _service.removeListener(_onConnectionChange);
-    _approvalSubscription?.cancel();
+    _responseSubscription?.cancel();
     super.dispose();
   }
 
@@ -403,10 +422,25 @@ class _FormScreenState extends State<FormScreen> {
     setState(() {});
   }
 
-  void _onApproval(ApprovalResponse response) {
+  void _onResponse(VisitorResponse response) {
+    if (_waitingResponse) {
+      setState(() {
+        _response = response;
+        _isSending = false;
+        _waitingResponse = false;
+      });
+    }
+  }
+
+  void _resetForm() {
     setState(() {
-      _approvalResponse = response;
+      _nameController.clear();
+      _selectedReason = 'Motivo 1';
+      _selectedArea = 'Área 1';
+      _selectedNode = null;
+      _response = null;
       _isSending = false;
+      _waitingResponse = false;
     });
   }
 
@@ -425,7 +459,8 @@ class _FormScreenState extends State<FormScreen> {
 
     setState(() {
       _isSending = true;
-      _approvalResponse = null;
+      _waitingResponse = true;
+      _response = null;
     });
 
     final success = await _service.sendVisitRequest(
@@ -436,9 +471,13 @@ class _FormScreenState extends State<FormScreen> {
     );
 
     if (!success) {
-      setState(() => _isSending = false);
+      setState(() {
+        _isSending = false;
+        _waitingResponse = false;
+      });
       _showSnackBar('Error al enviar la solicitud');
     } else {
+      setState(() => _isSending = false);
       _showSnackBar('Solicitud enviada a ${_selectedNode!.displayName}');
     }
   }
@@ -493,35 +532,122 @@ class _FormScreenState extends State<FormScreen> {
     );
   }
 
-  Widget _buildApprovalCard() {
-    if (_approvalResponse == null) return const SizedBox.shrink();
+  Widget _buildResponseCard() {
+    // Mostrar indicador de espera
+    if (_waitingResponse && _response == null) {
+      return Card(
+        elevation: 4,
+        color: Colors.blue.shade50,
+        child: const Padding(
+          padding: EdgeInsets.all(24.0),
+          child: Column(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text(
+                'Esperando respuesta...',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              SizedBox(height: 4),
+              Text(
+                'La solicitud fue enviada al supervisor',
+                style: TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // No hay respuesta
+    if (_response == null) return const SizedBox.shrink();
+
+    // Determinar colores y iconos según status
+    final isApproved = _response!.isApproved;
+    final isDenied = _response!.isDenied;
+
+    final Color bgColor = isApproved
+        ? Colors.green.shade50
+        : isDenied
+            ? Colors.red.shade50
+            : Colors.orange.shade50;
+
+    final Color iconColor = isApproved
+        ? Colors.green
+        : isDenied
+            ? Colors.red
+            : Colors.orange;
+
+    final IconData icon = isApproved
+        ? Icons.check_circle
+        : isDenied
+            ? Icons.cancel
+            : Icons.pending;
+
+    final String statusText = isApproved
+        ? 'APROBADO'
+        : isDenied
+            ? 'NEGADO'
+            : 'PENDIENTE';
 
     return Card(
       elevation: 4,
-      color: Colors.green.shade50,
+      color: bgColor,
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            const Icon(
-              Icons.check_circle,
-              color: Colors.green,
-              size: 48,
-            ),
+            Icon(icon, color: iconColor, size: 56),
             const SizedBox(height: 12),
             Text(
-              'Aprobó: ${_approvalResponse!.supervisorName}',
-              style: const TextStyle(
-                fontSize: 18,
+              statusText,
+              style: TextStyle(
+                fontSize: 24,
                 fontWeight: FontWeight.bold,
+                color: iconColor,
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 8),
             Text(
-              'Nodo: ${_approvalResponse!.nodeId}',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade700,
+              'Por: ${_response!.supervisorName}',
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            if (_response!.comment != null && _response!.comment!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.white70,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.comment, size: 18, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _response!.comment!,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: _resetForm,
+              icon: const Icon(Icons.add),
+              label: const Text('Nueva Solicitud'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.primary,
+                foregroundColor: Colors.white,
               ),
             ),
           ],
@@ -679,7 +805,7 @@ class _FormScreenState extends State<FormScreen> {
               ),
               const SizedBox(height: 24),
 
-              _buildApprovalCard(),
+              _buildResponseCard(),
 
               if (_service.status == ConnectionStatus.error ||
                   _service.status == ConnectionStatus.disconnected)

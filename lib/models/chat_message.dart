@@ -68,6 +68,64 @@ class MeshNode {
   String get shortId => '!${nodeId.toRadixString(16)}';
 }
 
+/// Solicitud de visitante
+class VisitorRequest {
+  final int requestId;
+  final String visitorName;
+  final String reason;
+  final String area;
+  final int fromNodeId;
+  final String fromNodeName;
+  final DateTime timestamp;
+  bool isResponded;
+  String? responseStatus; // APROBADO, NEGADO, PENDIENTE
+
+  VisitorRequest({
+    required this.requestId,
+    required this.visitorName,
+    required this.reason,
+    required this.area,
+    required this.fromNodeId,
+    required this.fromNodeName,
+    required this.timestamp,
+    this.isResponded = false,
+    this.responseStatus,
+  });
+
+  String get formattedTime {
+    final hour = timestamp.hour.toString().padLeft(2, '0');
+    final minute = timestamp.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String get formattedDate {
+    final day = timestamp.day.toString().padLeft(2, '0');
+    final month = timestamp.month.toString().padLeft(2, '0');
+    return '$day/$month';
+  }
+}
+
+/// Respuesta a solicitud de visitante
+class VisitorResponse {
+  final String status; // APROBADO, NEGADO, PENDIENTE
+  final String supervisorName;
+  final String? comment;
+  final int fromNodeId;
+  final DateTime timestamp;
+
+  VisitorResponse({
+    required this.status,
+    required this.supervisorName,
+    this.comment,
+    required this.fromNodeId,
+    required this.timestamp,
+  });
+
+  bool get isApproved => status == 'APROBADO';
+  bool get isDenied => status == 'NEGADO';
+  bool get isPending => status == 'PENDIENTE';
+}
+
 class ChatDestination {
   final String displayName;
   final int? channel;

@@ -76,11 +76,22 @@ class MeshtasticService extends ChangeNotifier {
   final Set<int> _processedPacketIds = {}; // Para evitar procesar paquetes duplicados
   final int _myNodeId = 0;
 
+  // Solicitudes de visitantes
+  final List<VisitorRequest> _pendingRequests = [];
+
   final _approvalController = StreamController<ApprovalResponse>.broadcast();
   final _messageController = StreamController<ChatMessage>.broadcast();
+  final _requestController = StreamController<VisitorRequest>.broadcast();
+  final _responseController = StreamController<VisitorResponse>.broadcast();
 
   Stream<ApprovalResponse> get approvalStream => _approvalController.stream;
   Stream<ChatMessage> get messageStream => _messageController.stream;
+  Stream<VisitorRequest> get requestStream => _requestController.stream;
+  Stream<VisitorResponse> get responseStream => _responseController.stream;
+
+  List<VisitorRequest> get pendingRequests => _pendingRequests.where((r) => !r.isResponded).toList();
+  List<VisitorRequest> get allRequests => List.unmodifiable(_pendingRequests);
+  int get pendingRequestsCount => pendingRequests.length;
 
   ConnectionStatus get status => _status;
   String get statusMessage => _statusMessage;
@@ -414,6 +425,54 @@ class MeshtasticService extends ChangeNotifier {
     }
   }
 
+  /// Responder a una solicitud de visitante
+  Future<bool> respondToRequest({
+    required int destinationNodeId,
+    required String status, // 'APROBADO', 'NEGADO', 'PENDIENTE'
+    required String supervisorName,
+    String? comment,
+  }) async {
+    if (!isConnected || _client == null) {
+      return false;
+    }
+
+    try {
+      final message = comment != null && comment.isNotEmpty
+          ? '$status|$supervisorName|$comment'
+          : '$status|$supervisorName';
+
+      debugPrint('📤 [RESPONSE] Enviando respuesta "$status" a nodo: $destinationNodeId');
+      await _client!.sendTextMessage(message, destinationId: destinationNodeId);
+
+      // Marcar solicitud como respondida localmente
+      for (final request in _pendingRequests) {
+        if (request.fromNodeId == destinationNodeId && !request.isResponded) {
+          request.isResponded = true;
+          request.responseStatus = status;
+          break;
+        }
+      }
+      notifyListeners();
+
+      return true;
+    } catch (e) {
+      debugPrint('Error enviando respuesta: $e');
+      return false;
+    }
+  }
+
+  /// Marcar solicitud como respondida
+  void markRequestResponded(int requestId, String status) {
+    for (final request in _pendingRequests) {
+      if (request.requestId == requestId) {
+        request.isResponded = true;
+        request.responseStatus = status;
+        break;
+      }
+    }
+    notifyListeners();
+  }
+
   void _handlePacket(dynamic packet) {
     debugPrint('📦 [PACKET] Recibido paquete: ${packet.runtimeType}');
 
@@ -518,31 +577,68 @@ class MeshtasticService extends ChangeNotifier {
       debugPrint('📩 [MSG] De: $fromName (ID: $fromNodeId)');
       debugPrint('📩 [MSG] Canal: $channel');
 
-      // Handle approval messages
-      if (text.startsWith('APROBADO|')) {
-        final parts = text.split('|');
-        if (parts.length >= 3) {
-          final response = ApprovalResponse(
-            supervisorName: parts[1],
-            nodeId: parts[2],
-          );
-          debugPrint('✅ [APPROVAL] Aprobación recibida: ${parts[1]}');
-          _approvalController.add(response);
-        }
-      }
-
-      // Determinar si es DM
-      final bool isDirectMessage = isDM;
-
-      debugPrint('📝 [MSG] isDirectMessage: $isDirectMessage, toNodeId: $toNodeId');
-
-      // Actualizar cache de nodos con el remitente para que aparezca en el dropdown de DM
+      // Actualizar cache de nodos con el remitente
       if (fromNodeId != 0) {
         _updateKnownNode(fromNodeId, fromName);
         debugPrint('👤 [NODE] Nodo agregado/actualizado: $fromName (ID: $fromNodeId)');
       }
 
-      // Create chat message
+      // ========== DETECTAR SOLICITUDES DE VISITANTES ==========
+      if (text.startsWith('VISITA|')) {
+        final parts = text.split('|');
+        if (parts.length >= 4) {
+          final request = VisitorRequest(
+            requestId: DateTime.now().millisecondsSinceEpoch,
+            visitorName: parts[1],
+            reason: parts[2],
+            area: parts[3],
+            fromNodeId: fromNodeId,
+            fromNodeName: fromName,
+            timestamp: DateTime.now(),
+          );
+          debugPrint('📋 [REQUEST] Solicitud de visitante recibida: ${parts[1]}');
+          _pendingRequests.add(request);
+          _requestController.add(request);
+          notifyListeners(); // Para actualizar badge
+        }
+        // NO agregar al chat normal - terminar aquí
+        if (packetId != 0) _processedPacketIds.add(packetId);
+        return;
+      }
+
+      // ========== DETECTAR RESPUESTAS A SOLICITUDES ==========
+      if (text.startsWith('APROBADO|') ||
+          text.startsWith('NEGADO|') ||
+          text.startsWith('PENDIENTE|')) {
+        final parts = text.split('|');
+        if (parts.length >= 2) {
+          final response = VisitorResponse(
+            status: parts[0],
+            supervisorName: parts[1],
+            comment: parts.length > 2 ? parts[2] : null,
+            fromNodeId: fromNodeId,
+            timestamp: DateTime.now(),
+          );
+          debugPrint('📬 [RESPONSE] Respuesta recibida: ${parts[0]} de ${parts[1]}');
+          _responseController.add(response);
+
+          // También emitir al viejo approvalStream para compatibilidad
+          if (parts[0] == 'APROBADO') {
+            _approvalController.add(ApprovalResponse(
+              supervisorName: parts[1],
+              nodeId: fromNodeId.toString(),
+            ));
+          }
+        }
+        // NO agregar al chat normal - terminar aquí
+        if (packetId != 0) _processedPacketIds.add(packetId);
+        return;
+      }
+
+      // ========== MENSAJE NORMAL DE CHAT ==========
+      final bool isDirectMessage = isDM;
+      debugPrint('📝 [MSG] isDirectMessage: $isDirectMessage, toNodeId: $toNodeId');
+
       final chatMessage = ChatMessage(
         messageText: text,
         fromNodeId: fromNodeId,
@@ -615,6 +711,8 @@ class MeshtasticService extends ChangeNotifier {
     _packetSubscription?.cancel();
     _approvalController.close();
     _messageController.close();
+    _requestController.close();
+    _responseController.close();
     _client?.disconnect();
     super.dispose();
   }
