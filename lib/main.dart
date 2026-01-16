@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'services/meshtastic_service.dart';
 import 'screens/settings_screen.dart';
 import 'screens/chat_screen.dart';
+import 'models/chat_message.dart'; // Para MeshNode
 
 void main() {
   runApp(const SiriusPorteriaApp());
@@ -373,6 +374,7 @@ class _FormScreenState extends State<FormScreen> {
 
   String _selectedReason = 'Motivo 1';
   String _selectedArea = 'Área 1';
+  MeshNode? _selectedNode; // Nodo destino seleccionado
   bool _isSending = false;
   ApprovalResponse? _approvalResponse;
   StreamSubscription<ApprovalResponse>? _approvalSubscription;
@@ -416,6 +418,11 @@ class _FormScreenState extends State<FormScreen> {
       return;
     }
 
+    if (_selectedNode == null) {
+      _showSnackBar('Por favor seleccione un nodo destino');
+      return;
+    }
+
     setState(() {
       _isSending = true;
       _approvalResponse = null;
@@ -425,11 +432,14 @@ class _FormScreenState extends State<FormScreen> {
       visitorName: _nameController.text.trim(),
       reason: _selectedReason,
       area: _selectedArea,
+      destinationNodeId: _selectedNode!.nodeId,
     );
 
     if (!success) {
       setState(() => _isSending = false);
       _showSnackBar('Error al enviar la solicitud');
+    } else {
+      _showSnackBar('Solicitud enviada a ${_selectedNode!.displayName}');
     }
   }
 
@@ -609,6 +619,44 @@ class _FormScreenState extends State<FormScreen> {
                   setState(() => _selectedArea = value!);
                 },
               ),
+              const SizedBox(height: 16),
+
+              // Selector de nodo destino
+              DropdownButtonFormField<MeshNode>(
+                initialValue: _selectedNode,
+                decoration: const InputDecoration(
+                  labelText: 'Enviar a (Nodo Destino)',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.router),
+                ),
+                hint: const Text('Seleccione un nodo'),
+                items: _service.onlineNodes.map((node) {
+                  return DropdownMenuItem(
+                    value: node,
+                    child: Text('${node.displayName} (${node.shortId})'),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  setState(() => _selectedNode = value);
+                },
+                validator: (value) {
+                  if (value == null) {
+                    return 'Por favor seleccione un nodo destino';
+                  }
+                  return null;
+                },
+              ),
+              if (_service.onlineNodes.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8.0),
+                  child: Text(
+                    'No hay nodos disponibles. Espere a recibir mensajes de otros nodos.',
+                    style: TextStyle(
+                      color: Colors.orange.shade700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 24),
 
               ElevatedButton.icon(

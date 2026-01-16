@@ -73,6 +73,7 @@ class MeshtasticService extends ChangeNotifier {
   // Chat
   final List<ChatMessage> _messageHistory = [];
   final Map<int, MeshNode> _knownNodes = {};
+  final Set<int> _processedPacketIds = {}; // Para evitar procesar paquetes duplicados
   final int _myNodeId = 0;
 
   final _approvalController = StreamController<ApprovalResponse>.broadcast();
@@ -384,11 +385,12 @@ class MeshtasticService extends ChangeNotifier {
     }
   }
 
-  // Visit request (legacy)
+  // Visit request - puede enviar a un nodo específico o broadcast
   Future<bool> sendVisitRequest({
     required String visitorName,
     required String reason,
     required String area,
+    int? destinationNodeId,
   }) async {
     if (!isConnected || _client == null) {
       return false;
@@ -396,7 +398,15 @@ class MeshtasticService extends ChangeNotifier {
 
     try {
       final message = 'VISITA|$visitorName|$reason|$area';
-      await _client!.sendTextMessage(message, channel: 0);
+      if (destinationNodeId != null) {
+        // Enviar como DM a un nodo específico
+        debugPrint('📤 [VISIT] Enviando solicitud a nodo: $destinationNodeId');
+        await _client!.sendTextMessage(message, destinationId: destinationNodeId);
+      } else {
+        // Broadcast al canal 0
+        debugPrint('📤 [VISIT] Enviando solicitud broadcast al canal 0');
+        await _client!.sendTextMessage(message, channel: 0);
+      }
       return true;
     } catch (e) {
       debugPrint('Error enviando solicitud: $e');
@@ -408,6 +418,13 @@ class MeshtasticService extends ChangeNotifier {
     debugPrint('📦 [PACKET] Recibido paquete: ${packet.runtimeType}');
 
     try {
+      // Obtener ID del paquete para deduplicación
+      final int packetId = packet.id as int? ?? 0;
+      if (packetId != 0 && _processedPacketIds.contains(packetId)) {
+        debugPrint('⚠️ [PACKET] Paquete duplicado ignorado: $packetId');
+        return;
+      }
+
       // Extraer info básica del paquete
       final int fromNodeId = packet.from as int? ?? 0;
       final int? toNodeId = packet.to as int?;
@@ -543,7 +560,16 @@ class MeshtasticService extends ChangeNotifier {
       debugPrint('📤 [STREAM] Emitiendo al messageStream...');
       _messageController.add(chatMessage);
 
-      debugPrint('✅ [DONE] Mensaje procesado correctamente');
+      // Marcar paquete como procesado para evitar duplicados
+      if (packetId != 0) {
+        _processedPacketIds.add(packetId);
+        // Limpiar IDs antiguos para no acumular memoria (mantener últimos 100)
+        if (_processedPacketIds.length > 100) {
+          _processedPacketIds.remove(_processedPacketIds.first);
+        }
+      }
+
+      debugPrint('✅ [DONE] Mensaje procesado correctamente (packetId: $packetId)');
 
     } catch (e, stackTrace) {
       debugPrint('❌ [ERROR] Error procesando paquete: $e');
@@ -552,6 +578,12 @@ class MeshtasticService extends ChangeNotifier {
   }
 
   void _addMessageToHistory(ChatMessage message) {
+    // Verificar si el mensaje ya existe (evitar duplicados)
+    if (_messageHistory.any((m) => m.id == message.id)) {
+      debugPrint('⚠️ [HISTORY] Mensaje duplicado ignorado: ${message.id}');
+      return;
+    }
+
     _messageHistory.add(message);
     // FIFO limit
     while (_messageHistory.length > _maxMessageHistory) {
