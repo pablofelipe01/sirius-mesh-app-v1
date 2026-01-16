@@ -467,24 +467,24 @@ class MeshtasticService extends ChangeNotifier {
         debugPrint('🔍 [PACKET] Paquete no marcado como texto pero tiene payload, intentando procesar...');
       }
 
-      // Extraer texto del mensaje
+      // Extraer texto del mensaje - SIEMPRE usar utf8.decode para soportar emojis
       String? text;
 
-      // Método 1: Usar la propiedad textMessage del wrapper
       try {
-        text = packet.textMessage as String?;
-      } catch (_) {}
-
-      // Método 2: Decodificar payload manualmente con UTF-8
-      if (text == null || text.isEmpty) {
-        try {
-          final decoded = packet.decoded;
-          if (decoded != null) {
-            final payload = decoded.payload;
-            if (payload is List<int> && payload.isNotEmpty) {
-              text = utf8.decode(payload, allowMalformed: true);
-            }
+        final decoded = packet.decoded;
+        if (decoded != null) {
+          final payload = decoded.payload;
+          if (payload is List<int> && payload.isNotEmpty) {
+            // UTF-8 decode es necesario para emojis (4 bytes) y caracteres especiales
+            text = utf8.decode(payload, allowMalformed: true);
+            debugPrint('🔤 [DECODE] Payload decodificado con UTF-8: "$text"');
           }
+        }
+      } catch (e) {
+        debugPrint('⚠️ [DECODE] Error decodificando payload: $e');
+        // Fallback: intentar con textMessage del wrapper (no soporta emojis bien)
+        try {
+          text = packet.textMessage as String?;
         } catch (_) {}
       }
 
