@@ -1,3 +1,10 @@
+enum DeliveryStatus {
+  sending,    // Enviado, esperando ACK (reloj gris)
+  delivered,  // ACK recibido (check verde)
+  failed,     // Error de routing (X roja)
+  none,       // Mensajes recibidos o broadcast (sin indicador de entrega)
+}
+
 class ChatMessage {
   final String id;
   final String messageText;
@@ -8,6 +15,7 @@ class ChatMessage {
   final int? toNodeId;
   final bool isDirectMessage;
   final bool isMine;
+  DeliveryStatus deliveryStatus;
 
   ChatMessage({
     String? id,
@@ -19,6 +27,7 @@ class ChatMessage {
     this.toNodeId,
     required this.isDirectMessage,
     required this.isMine,
+    this.deliveryStatus = DeliveryStatus.none,
   }) : id = id ?? '${fromNodeId}_${timestamp.millisecondsSinceEpoch}';
 
   String get formattedTime {

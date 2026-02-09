@@ -76,6 +76,10 @@ class MeshtasticService extends ChangeNotifier {
   final Set<int> _processedPacketIds = {}; // Para evitar procesar paquetes duplicados
   final int _myNodeId = 0;
 
+  // Tracking de entrega de DMs: nodeId destino -> lista de mensajes pendientes
+  final Map<int, List<ChatMessage>> _pendingDeliveries = {};
+  static const int _deliveryTimeoutSeconds = 45;
+
   // Solicitudes de visitantes
   final List<VisitorRequest> _pendingRequests = [];
 
@@ -374,6 +378,7 @@ class MeshtasticService extends ChangeNotifier {
       }
 
       // Add own message to history
+      final isDM = destinationId != null;
       final myMessage = ChatMessage(
         messageText: text,
         fromNodeId: _myNodeId,
@@ -381,13 +386,21 @@ class MeshtasticService extends ChangeNotifier {
         timestamp: DateTime.now(),
         channel: channel ?? 0,
         toNodeId: destinationId,
-        isDirectMessage: destinationId != null,
+        isDirectMessage: isDM,
         isMine: true,
+        deliveryStatus: isDM ? DeliveryStatus.sending : DeliveryStatus.none,
       );
       _addMessageToHistory(myMessage);
       _messageController.add(myMessage);
 
-      debugPrint('✅ [SEND] Mensaje enviado correctamente');
+      // Para DMs, rastrear entrega pendiente con timeout
+      if (destinationId != null) {
+        _pendingDeliveries.putIfAbsent(destinationId, () => []);
+        _pendingDeliveries[destinationId]!.add(myMessage);
+        _scheduleDeliveryTimeout(myMessage, destinationId);
+      }
+
+      debugPrint('✅ [SEND] Mensaje enviado correctamente (delivery: ${myMessage.deliveryStatus})');
       return true;
     } catch (e, stackTrace) {
       debugPrint('❌ [SEND] Error enviando mensaje: $e');
@@ -517,6 +530,17 @@ class MeshtasticService extends ChangeNotifier {
               _updateKnownNode(fromNodeId, nodeName);
             }
           }
+        }
+      } catch (_) {}
+
+      // ========== DETECTAR PAQUETES DE ROUTING (ACK/NACK) ==========
+      try {
+        final bool isRouting = packet.isRouting as bool? ?? false;
+        if (isRouting) {
+          debugPrint('📨 [ROUTING] Paquete de routing recibido de nodo $fromNodeId');
+          _handleRoutingPacket(packet);
+          if (packetId != 0) _processedPacketIds.add(packetId);
+          return;
         }
       } catch (_) {}
 
@@ -670,6 +694,60 @@ class MeshtasticService extends ChangeNotifier {
     } catch (e, stackTrace) {
       debugPrint('❌ [ERROR] Error procesando paquete: $e');
       debugPrint('❌ [STACK] $stackTrace');
+    }
+  }
+
+  /// Programa timeout para un mensaje DM pendiente
+  void _scheduleDeliveryTimeout(ChatMessage message, int destinationId) {
+    Future.delayed(const Duration(seconds: _deliveryTimeoutSeconds), () {
+      if (message.deliveryStatus == DeliveryStatus.sending) {
+        message.deliveryStatus = DeliveryStatus.failed;
+        _pendingDeliveries[destinationId]?.remove(message);
+        debugPrint('⏰ [DELIVERY] Timeout para mensaje a nodo $destinationId');
+        notifyListeners();
+      }
+    });
+  }
+
+  /// Procesa paquetes de routing (ACK/NACK) para actualizar estado de entrega
+  void _handleRoutingPacket(dynamic packet) {
+    try {
+      final int fromNodeId = packet.from as int? ?? 0;
+      final decoded = packet.decoded;
+      if (decoded == null) return;
+
+      // Parsear el payload de routing
+      final payload = decoded.payload;
+      if (payload == null || payload is! List<int> || payload.isEmpty) return;
+
+      final routing = Routing.fromBuffer(payload);
+
+      if (routing.hasErrorReason()) {
+        final error = routing.errorReason;
+        debugPrint('📨 [ROUTING] Routing de nodo $fromNodeId, error: $error');
+
+        if (error == Routing_Error.NONE) {
+          // ACK exitoso - marcar como entregado
+          _updateDeliveryStatus(fromNodeId, DeliveryStatus.delivered);
+        } else {
+          // Error de routing - marcar como fallido
+          debugPrint('❌ [ROUTING] Error de entrega: $error');
+          _updateDeliveryStatus(fromNodeId, DeliveryStatus.failed);
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ [ROUTING] Error procesando paquete routing: $e');
+    }
+  }
+
+  /// Actualiza el estado de entrega del mensaje pendiente mas antiguo hacia un nodo
+  void _updateDeliveryStatus(int nodeId, DeliveryStatus status) {
+    final pending = _pendingDeliveries[nodeId];
+    if (pending != null && pending.isNotEmpty) {
+      final message = pending.removeAt(0);
+      message.deliveryStatus = status;
+      debugPrint('📨 [DELIVERY] Mensaje a nodo $nodeId -> $status');
+      notifyListeners();
     }
   }
 

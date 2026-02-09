@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/meshtastic_service.dart';
 import '../widgets/battery_indicator.dart';
+import '../widgets/delivery_indicator.dart';
 
 class ChatScreen extends StatefulWidget {
   final MeshtasticService meshtasticService;
@@ -268,6 +269,13 @@ class _ChatScreenState extends State<ChatScreen> {
                             color: Colors.grey.shade500,
                           ),
                         ),
+                        if (message.isMine)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: DeliveryIndicator(
+                              status: message.deliveryStatus,
+                            ),
+                          ),
                       ],
                     ),
                   ],
