@@ -688,6 +688,40 @@ class MeshtasticService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Obtiene el nivel de batería de un nodo desde el SDK
+  int? _getNodeBatteryLevel(int nodeId) {
+    try {
+      final nodeInfo = _client?.nodes[nodeId];
+      return nodeInfo?.batteryLevel;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Obtiene el voltaje de un nodo desde el SDK
+  double? _getNodeVoltage(int nodeId) {
+    try {
+      final nodeInfo = _client?.nodes[nodeId];
+      return nodeInfo?.voltage;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Obtiene batería del nodo local conectado
+  int? get connectedNodeBatteryLevel {
+    final myNum = myNodeNum;
+    if (myNum == null) return null;
+    return _getNodeBatteryLevel(myNum);
+  }
+
+  /// Obtiene voltaje del nodo local conectado
+  double? get connectedNodeVoltage {
+    final myNum = myNodeNum;
+    if (myNum == null) return null;
+    return _getNodeVoltage(myNum);
+  }
+
   void _updateKnownNode(int nodeId, String nodeName) {
     if (nodeId == 0) return;
     _knownNodes[nodeId] = MeshNode(
@@ -695,6 +729,8 @@ class MeshtasticService extends ChangeNotifier {
       nodeName: nodeName,
       isOnline: true,
       lastSeen: DateTime.now(),
+      batteryLevel: _getNodeBatteryLevel(nodeId),
+      voltage: _getNodeVoltage(nodeId),
     );
     notifyListeners();
   }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/meshtastic_service.dart';
+import '../widgets/battery_indicator.dart';
 
 class ChatScreen extends StatefulWidget {
   final MeshtasticService meshtasticService;
@@ -160,7 +161,18 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             children: [
               const Text('👤 '),
-              Text('DM: ${node.displayName} (${node.shortId})'),
+              Expanded(
+                child: Text(
+                  'DM: ${node.displayName} (${node.shortId})',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 4),
+              BatteryIndicator(
+                batteryLevel: node.batteryLevel,
+                iconSize: 16,
+                showPercentage: false,
+              ),
             ],
           ),
         ));

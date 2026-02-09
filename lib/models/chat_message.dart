@@ -56,16 +56,23 @@ class MeshNode {
   final String nodeName;
   final bool isOnline;
   final DateTime? lastSeen;
+  final int? batteryLevel; // 0-100, >100 = USB powered
+  final double? voltage;
 
   MeshNode({
     required this.nodeId,
     required this.nodeName,
     this.isOnline = true,
     this.lastSeen,
+    this.batteryLevel,
+    this.voltage,
   });
 
   String get displayName => nodeName.isNotEmpty ? nodeName : 'Nodo !${nodeId.toRadixString(16)}';
   String get shortId => '!${nodeId.toRadixString(16)}';
+
+  /// Indica si el nodo está alimentado por USB (batteryLevel > 100)
+  bool get isUsbPowered => batteryLevel != null && batteryLevel! > 100;
 }
 
 /// Solicitud de visitante

@@ -5,6 +5,7 @@ import 'screens/settings_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/requests_screen.dart';
 import 'models/chat_message.dart';
+import 'widgets/battery_indicator.dart';
 
 void main() {
   runApp(const SiriusPorteriaApp());
@@ -759,7 +760,22 @@ class _FormScreenState extends State<FormScreen> {
                 items: _service.onlineNodes.map((node) {
                   return DropdownMenuItem(
                     value: node,
-                    child: Text('${node.displayName} (${node.shortId})'),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${node.displayName} (${node.shortId})',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        BatteryIndicator(
+                          batteryLevel: node.batteryLevel,
+                          iconSize: 16,
+                          showPercentage: false,
+                        ),
+                      ],
+                    ),
                   );
                 }).toList(),
                 onChanged: (value) {

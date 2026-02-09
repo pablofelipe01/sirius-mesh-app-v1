@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/meshtastic_service.dart';
+import '../widgets/battery_indicator.dart';
 
 class SettingsScreen extends StatefulWidget {
   final MeshtasticService meshtasticService;
@@ -137,6 +138,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
               'Estado',
               isConnected ? 'Conectado' : 'Desconectado',
               valueColor: isConnected ? Colors.green : Colors.red,
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Bateria',
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 14,
+                  ),
+                ),
+                BatteryIndicator(
+                  batteryLevel: _service.connectedNodeBatteryLevel,
+                  voltage: _service.connectedNodeVoltage,
+                  iconSize: 20,
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             SizedBox(
