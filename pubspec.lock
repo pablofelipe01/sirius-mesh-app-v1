@@ -235,11 +235,10 @@ packages:
   meshtastic_flutter:
     dependency: "direct main"
     description:
-      name: meshtastic_flutter
-      sha256: "3a1a722331d71a3f783e1c920bd49de77b5d57678f80c6b53014de3efc0c2111"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.0.3"
+      path: "packages/meshtastic_flutter"
+      relative: true
+    source: path
+    version: "0.0.3+local.1"
   meta:
     dependency: transitive
     description:

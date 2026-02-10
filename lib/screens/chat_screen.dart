@@ -126,22 +126,38 @@ class _ChatScreenState extends State<ChatScreen> {
     final items = <DropdownMenuItem<ChatDestination>>[];
 
     // Canales
+    final ch0Unread = _service.hasUnreadOnChannel(0);
     items.add(DropdownMenuItem(
       value: ChatDestination.primaryChannel,
       child: Row(
         children: [
           const Text('📢 '),
           Text(ChatDestination.primaryChannel.displayName),
+          if (ch0Unread) ...[
+            const SizedBox(width: 6),
+            Container(
+              width: 8, height: 8,
+              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+            ),
+          ],
         ],
       ),
     ));
 
+    final ch1Unread = _service.hasUnreadOnChannel(1);
     items.add(DropdownMenuItem(
       value: ChatDestination.supervisorsChannel,
       child: Row(
         children: [
           const Text('🔒 '),
           Text(ChatDestination.supervisorsChannel.displayName),
+          if (ch1Unread) ...[
+            const SizedBox(width: 6),
+            Container(
+              width: 8, height: 8,
+              decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+            ),
+          ],
         ],
       ),
     ));
@@ -157,6 +173,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       for (final node in onlineNodes) {
         final destination = ChatDestination.directMessage(node);
+        final hasUnread = _service.hasUnreadFromNode(node.nodeId);
         items.add(DropdownMenuItem(
           value: destination,
           child: Row(
@@ -166,8 +183,18 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: Text(
                   'DM: ${node.displayName} (${node.shortId})',
                   overflow: TextOverflow.ellipsis,
+                  style: hasUnread
+                      ? const TextStyle(fontWeight: FontWeight.bold)
+                      : null,
                 ),
               ),
+              if (hasUnread) ...[
+                const SizedBox(width: 4),
+                Container(
+                  width: 8, height: 8,
+                  decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+                ),
+              ],
               const SizedBox(width: 4),
               BatteryIndicator(
                 batteryLevel: node.batteryLevel,
@@ -456,6 +483,7 @@ class _ChatScreenState extends State<ChatScreen> {
               items: _buildDestinationItems(),
               onChanged: (value) {
                 if (value != null) {
+                  _service.clearUnreadForDestination(value);
                   setState(() => _selectedDestination = value);
                   _updateFilteredMessages();
                 }

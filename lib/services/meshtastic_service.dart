@@ -12,6 +12,20 @@ const String _savedDeviceNameKey = 'saved_device_name';
 const String _loraRegionKey = 'lora_region';
 const int _maxMessageHistory = 100;
 
+// Nodos pregrabados
+const int gatewayNodeId = 0x9ea29bc4;
+const String gatewayNodeName = 'Mission Pack';
+const int pabloANodeId = 0x7c1a5974;
+const String pabloANodeName = 'Pablo A';
+const int pabloLongNodeId = 0xf515b946;
+const String pabloLongNodeName = 'Pablo Long';
+const int davidIngeNodeId = 0x455250c3;
+const String davidIngeNodeName = 'David_Inge';
+const int testDavidNodeId = 0x4190dee3;
+const String testDavidNodeName = 'Test David';
+const int macCommanderNodeId = 0x4bf18b6e;
+const String macCommanderNodeName = 'Mac Commander';
+
 enum ConnectionStatus {
   disconnected,
   scanning,
@@ -76,9 +90,33 @@ class MeshtasticService extends ChangeNotifier {
   final Set<int> _processedPacketIds = {}; // Para evitar procesar paquetes duplicados
   final int _myNodeId = 0;
 
+  MeshtasticService() {
+    // Nodos pregrabados — siempre disponibles como destino
+    for (final entry in _preloadedNodes) {
+      _knownNodes[entry.nodeId] = entry;
+    }
+  }
+
+  static final List<MeshNode> _preloadedNodes = [
+    MeshNode(nodeId: gatewayNodeId, nodeName: gatewayNodeName, isOnline: true),
+    MeshNode(nodeId: pabloANodeId, nodeName: pabloANodeName, isOnline: true),
+    MeshNode(nodeId: pabloLongNodeId, nodeName: pabloLongNodeName, isOnline: true),
+    MeshNode(nodeId: davidIngeNodeId, nodeName: davidIngeNodeName, isOnline: true),
+    MeshNode(nodeId: testDavidNodeId, nodeName: testDavidNodeName, isOnline: true),
+    MeshNode(nodeId: macCommanderNodeId, nodeName: macCommanderNodeName, isOnline: true),
+  ];
+
+  /// Nodo gateway pregrabado
+  MeshNode get gatewayNode => _knownNodes[gatewayNodeId]!;
+
   // Tracking de entrega de DMs: nodeId destino -> lista de mensajes pendientes
   final Map<int, List<ChatMessage>> _pendingDeliveries = {};
   static const int _deliveryTimeoutSeconds = 45;
+
+  // Mensajes no leídos
+  int _unreadChatCount = 0;
+  final Set<int> _nodesWithUnread = {};  // Nodos con DMs no leídos
+  final Set<int> _channelsWithUnread = {};  // Canales con mensajes no leídos
 
   // Solicitudes de visitantes
   final List<VisitorRequest> _pendingRequests = [];
@@ -107,6 +145,27 @@ class MeshtasticService extends ChangeNotifier {
   List<ChatMessage> get messageHistory => List.unmodifiable(_messageHistory);
   List<MeshNode> get onlineNodes => _knownNodes.values.where((n) => n.isOnline).toList();
   int get myNodeId => _myNodeId;
+
+  // Getters de mensajes no leídos
+  int get unreadChatCount => _unreadChatCount;
+  bool hasUnreadFromNode(int nodeId) => _nodesWithUnread.contains(nodeId);
+  bool hasUnreadOnChannel(int channel) => _channelsWithUnread.contains(channel);
+
+  /// Limpiar contador total (al entrar al tab de chat)
+  void clearUnreadChat() {
+    _unreadChatCount = 0;
+    notifyListeners();
+  }
+
+  /// Limpiar no leídos de un destino específico (al seleccionar en dropdown)
+  void clearUnreadForDestination(ChatDestination destination) {
+    if (destination.isChannel) {
+      _channelsWithUnread.remove(destination.channel);
+    } else if (destination.nodeId != null) {
+      _nodesWithUnread.remove(destination.nodeId);
+    }
+    notifyListeners();
+  }
 
   List<ChatMessage> getMessagesForDestination(ChatDestination destination) {
     if (destination.isChannel) {
@@ -676,6 +735,14 @@ class MeshtasticService extends ChangeNotifier {
 
       debugPrint('💬 [CHAT] Agregando mensaje al historial (isDM: $isDirectMessage)...');
       _addMessageToHistory(chatMessage);
+
+      // Incrementar contador de no leídos
+      _unreadChatCount++;
+      if (isDirectMessage) {
+        _nodesWithUnread.add(fromNodeId);
+      } else {
+        _channelsWithUnread.add(channel);
+      }
 
       debugPrint('📤 [STREAM] Emitiendo al messageStream...');
       _messageController.add(chatMessage);

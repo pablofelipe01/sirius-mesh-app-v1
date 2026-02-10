@@ -82,6 +82,14 @@ class MeshNode {
 
   /// Indica si el nodo está alimentado por USB (batteryLevel > 100)
   bool get isUsbPowered => batteryLevel != null && batteryLevel! > 100;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is MeshNode && nodeId == other.nodeId;
+
+  @override
+  int get hashCode => nodeId.hashCode;
 }
 
 /// Solicitud de visitante

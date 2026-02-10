@@ -331,12 +331,16 @@ class _MainScreenState extends State<MainScreen> {
   @override
   Widget build(BuildContext context) {
     final pendingCount = _service.pendingRequestsCount;
+    final unreadChat = _service.unreadChatCount;
 
     return Scaffold(
       body: _buildCurrentPage(),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) {
+          if (index == 2) {
+            _service.clearUnreadChat();
+          }
           setState(() => _currentIndex = index);
         },
         destinations: [
@@ -358,9 +362,17 @@ class _MainScreenState extends State<MainScreen> {
             ),
             label: 'Solicitudes',
           ),
-          const NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
+          NavigationDestination(
+            icon: Badge(
+              label: Text('$unreadChat'),
+              isLabelVisible: unreadChat > 0,
+              child: const Icon(Icons.chat_bubble_outline),
+            ),
+            selectedIcon: Badge(
+              label: Text('$unreadChat'),
+              isLabelVisible: unreadChat > 0,
+              child: const Icon(Icons.chat_bubble),
+            ),
             label: 'Chat',
           ),
           const NavigationDestination(
@@ -407,6 +419,7 @@ class _FormScreenState extends State<FormScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedNode = _service.gatewayNode; // Gateway pregrabado por defecto
     _service.addListener(_onConnectionChange);
     _responseSubscription = _service.responseStream.listen(_onResponse);
   }
