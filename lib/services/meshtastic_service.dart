@@ -10,6 +10,7 @@ const int _maxMessageBytes = 237; // Límite de Meshtastic para mensajes de text
 const String _savedDeviceAddressKey = 'saved_device_address';
 const String _savedDeviceNameKey = 'saved_device_name';
 const String _loraRegionKey = 'lora_region';
+const String _gatewayNodeIdKey = 'gateway_node_id';
 const int _maxMessageHistory = 100;
 
 // Nodos pregrabados
@@ -84,17 +85,31 @@ class MeshtasticService extends ChangeNotifier {
   String? _connectedDeviceName;
   String? _connectedDeviceMac;
 
+  // Auto-reconexión
+  bool _autoReconnectEnabled = false;
+  bool _isReconnecting = false;
+  static const int _maxReconnectAttempts = 10;
+  static const Duration _reconnectDelay = Duration(seconds: 2);
+
+  // Keepalive — mantiene la conexión BLE activa
+  Timer? _keepaliveTimer;
+  static const Duration _keepaliveInterval = Duration(seconds: 15);
+
   // Chat
   final List<ChatMessage> _messageHistory = [];
   final Map<int, MeshNode> _knownNodes = {};
   final Set<int> _processedPacketIds = {}; // Para evitar procesar paquetes duplicados
   final int _myNodeId = 0;
 
+  // Gateway configurable
+  int? _selectedGatewayNodeId;
+
   MeshtasticService() {
     // Nodos pregrabados — siempre disponibles como destino
     for (final entry in _preloadedNodes) {
       _knownNodes[entry.nodeId] = entry;
     }
+    _loadSavedGatewayNodeId();
   }
 
   static final List<MeshNode> _preloadedNodes = [
@@ -106,8 +121,11 @@ class MeshtasticService extends ChangeNotifier {
     MeshNode(nodeId: macCommanderNodeId, nodeName: macCommanderNodeName, isOnline: true),
   ];
 
-  /// Nodo gateway pregrabado
-  MeshNode get gatewayNode => _knownNodes[gatewayNodeId]!;
+  /// ID del gateway actualmente configurado (cache o default)
+  int get currentGatewayNodeId => _selectedGatewayNodeId ?? gatewayNodeId;
+
+  /// Nodo gateway actual (busca en nodos conocidos)
+  MeshNode? get currentGatewayNode => _knownNodes[currentGatewayNodeId];
 
   // Tracking de entrega de DMs: nodeId destino -> lista de mensajes pendientes
   final Map<int, List<ChatMessage>> _pendingDeliveries = {};
@@ -120,6 +138,9 @@ class MeshtasticService extends ChangeNotifier {
 
   // Solicitudes de visitantes
   final List<VisitorRequest> _pendingRequests = [];
+
+  // Visitantes activos (aprobados, dentro del recinto)
+  final List<ActiveVisitor> _activeVisitors = [];
 
   final _approvalController = StreamController<ApprovalResponse>.broadcast();
   final _messageController = StreamController<ChatMessage>.broadcast();
@@ -134,6 +155,9 @@ class MeshtasticService extends ChangeNotifier {
   List<VisitorRequest> get pendingRequests => _pendingRequests.where((r) => !r.isResponded).toList();
   List<VisitorRequest> get allRequests => List.unmodifiable(_pendingRequests);
   int get pendingRequestsCount => pendingRequests.length;
+
+  List<ActiveVisitor> get activeVisitors => _activeVisitors.where((v) => !v.hasExited).toList();
+  List<ActiveVisitor> get allVisitors => List.unmodifiable(_activeVisitors);
 
   ConnectionStatus get status => _status;
   String get statusMessage => _statusMessage;
@@ -278,20 +302,44 @@ class MeshtasticService extends ChangeNotifier {
     await prefs.setString(_loraRegionKey, region.code);
   }
 
+  // Gateway node persistence
+  Future<void> _loadSavedGatewayNodeId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getInt(_gatewayNodeIdKey);
+    if (saved != null) {
+      _selectedGatewayNodeId = saved;
+      notifyListeners();
+    }
+  }
+
+  Future<int> getSavedGatewayNodeId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_gatewayNodeIdKey) ?? gatewayNodeId;
+  }
+
+  Future<void> saveGatewayNodeId(int nodeId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_gatewayNodeIdKey, nodeId);
+    _selectedGatewayNodeId = nodeId;
+    notifyListeners();
+  }
+
   Future<bool> setLoraRegion(LoraRegion region) async {
-    if (!isConnected || _client == null) {
-      return false;
+    // Siempre guardar localmente la preferencia
+    await saveLoraRegion(region);
+
+    // Intentar enviar al dispositivo si está conectado y configurado
+    if (isConnected && _client != null) {
+      try {
+        final configMessage = 'CONFIG|LORA_REGION|${region.code}';
+        await _client!.sendTextMessage(configMessage, channel: 0);
+      } catch (e) {
+        debugPrint('Aviso: No se pudo enviar región al dispositivo: $e');
+        // No es error crítico — la región queda guardada localmente
+      }
     }
 
-    try {
-      final configMessage = 'CONFIG|LORA_REGION|${region.code}';
-      await _client!.sendTextMessage(configMessage, channel: 0);
-      await saveLoraRegion(region);
-      return true;
-    } catch (e) {
-      debugPrint('Error configurando región LoRa: $e');
-      return false;
-    }
+    return true;
   }
 
   // Device scanning
@@ -315,6 +363,12 @@ class MeshtasticService extends ChangeNotifier {
 
   // Connection methods
   Future<void> connectToSavedDevice() async {
+    // No reconectar si ya estamos conectados o en proceso de conexión
+    if (_client != null && (isConnected || _status == ConnectionStatus.connecting)) {
+      debugPrint('✅ [SERVICE] Ya conectado/conectando, omitiendo reconexión');
+      return;
+    }
+
     final savedAddress = await getSavedDeviceAddress();
     final savedName = await getSavedDeviceName();
     if (savedAddress != null) {
@@ -329,13 +383,19 @@ class MeshtasticService extends ChangeNotifier {
       _updateStatus(ConnectionStatus.connecting, 'Conectando...');
       await _ensureClientInitialized();
 
+      // Cancelar listeners anteriores para evitar duplicados
+      await _connectionSubscription?.cancel();
+      await _packetSubscription?.cancel();
+
       _connectionSubscription = _client!.connectionStream.listen((status) {
         final stateStr = status.state.toString().toLowerCase();
         if (stateStr.contains('connected') && !stateStr.contains('dis')) {
           _updateStatus(ConnectionStatus.connected, 'Conectado');
+          _autoReconnectEnabled = true;
+          _startKeepalive();
           _applyInitialConfig();
         } else if (stateStr.contains('disconnect')) {
-          _updateStatus(ConnectionStatus.disconnected, 'Desconectado');
+          _onUnexpectedDisconnect();
         }
       });
 
@@ -366,13 +426,19 @@ class MeshtasticService extends ChangeNotifier {
       _updateStatus(ConnectionStatus.connecting, 'Conectando a ${device.name}...');
       await _ensureClientInitialized();
 
+      // Cancelar listeners anteriores para evitar duplicados
+      await _connectionSubscription?.cancel();
+      await _packetSubscription?.cancel();
+
       _connectionSubscription = _client!.connectionStream.listen((status) {
         final stateStr = status.state.toString().toLowerCase();
         if (stateStr.contains('connected') && !stateStr.contains('dis')) {
           _updateStatus(ConnectionStatus.connected, 'Conectado');
+          _autoReconnectEnabled = true;
+          _startKeepalive();
           _applyInitialConfig();
         } else if (stateStr.contains('disconnect')) {
-          _updateStatus(ConnectionStatus.disconnected, 'Desconectado');
+          _onUnexpectedDisconnect();
         }
       });
 
@@ -400,7 +466,102 @@ class MeshtasticService extends ChangeNotifier {
     }
   }
 
+  /// Inicia el timer de keepalive BLE (evita que iOS desconecte por inactividad)
+  void _startKeepalive() {
+    _stopKeepalive();
+    _keepaliveTimer = Timer.periodic(_keepaliveInterval, (_) async {
+      if (isConnected && _client != null) {
+        try {
+          await _client!.keepAlive();
+        } catch (e) {
+          debugPrint('⚠️ [KEEPALIVE] Error: $e');
+        }
+      }
+    });
+    debugPrint('💓 [KEEPALIVE] Timer iniciado (cada ${_keepaliveInterval.inSeconds}s)');
+  }
+
+  /// Detiene el timer de keepalive
+  void _stopKeepalive() {
+    _keepaliveTimer?.cancel();
+    _keepaliveTimer = null;
+  }
+
+  /// Maneja desconexión inesperada — intenta reconectar automáticamente
+  void _onUnexpectedDisconnect() {
+    _stopKeepalive();
+    // Solo reconectar si previamente estábamos conectados
+    final wasConnected = _status == ConnectionStatus.connected;
+    _updateStatus(ConnectionStatus.disconnected, 'Desconectado');
+    if (wasConnected && _autoReconnectEnabled && !_isReconnecting) {
+      _attemptReconnect();
+    }
+  }
+
+  Future<void> _attemptReconnect() async {
+    final savedAddress = await getSavedDeviceAddress();
+    if (savedAddress == null || _isReconnecting) return;
+
+    _isReconnecting = true;
+
+    for (int attempt = 1; attempt <= _maxReconnectAttempts; attempt++) {
+      if (!_autoReconnectEnabled) break; // Se canceló la reconexión
+      if (isConnected) break; // Ya reconectó
+
+      debugPrint('🔄 [RECONNECT] Intento $attempt/$_maxReconnectAttempts...');
+      _updateStatus(ConnectionStatus.connecting, 'Reconectando ($attempt/$_maxReconnectAttempts)...');
+
+      try {
+        // Limpiar cliente anterior
+        await _connectionSubscription?.cancel();
+        await _packetSubscription?.cancel();
+        _client = null;
+
+        await _ensureClientInitialized();
+
+        _connectionSubscription = _client!.connectionStream.listen((status) {
+          final stateStr = status.state.toString().toLowerCase();
+          if (stateStr.contains('connected') && !stateStr.contains('dis')) {
+            _updateStatus(ConnectionStatus.connected, 'Conectado');
+            _isReconnecting = false;
+            _startKeepalive();
+            _applyInitialConfig();
+          } else if (stateStr.contains('disconnect')) {
+            _onUnexpectedDisconnect();
+          }
+        });
+
+        _packetSubscription = _client!.packetStream.listen(
+          _handlePacket,
+          onError: (e) => debugPrint('❌ [PACKET_ERROR] $e'),
+        );
+
+        await for (final device in _client!.scanForDevices()) {
+          if (device.remoteId.toString() == savedAddress) {
+            await _client!.connectToDevice(device);
+            debugPrint('✅ [RECONNECT] Reconectado exitosamente');
+            _isReconnecting = false;
+            return;
+          }
+        }
+      } catch (e) {
+        debugPrint('❌ [RECONNECT] Intento $attempt falló: $e');
+      }
+
+      if (attempt < _maxReconnectAttempts) {
+        await Future.delayed(_reconnectDelay);
+      }
+    }
+
+    _isReconnecting = false;
+    if (!isConnected) {
+      _updateStatus(ConnectionStatus.error, 'No se pudo reconectar');
+    }
+  }
+
   Future<void> disconnect() async {
+    _autoReconnectEnabled = false; // Desconexión manual — no reconectar
+    _stopKeepalive();
     try {
       await _connectionSubscription?.cancel();
       await _packetSubscription?.cancel();
@@ -503,6 +664,10 @@ class MeshtasticService extends ChangeNotifier {
     required String status, // 'APROBADO', 'NEGADO', 'PENDIENTE'
     required String supervisorName,
     String? comment,
+    // Datos del visitante para enviar REGISTRO al gateway
+    String? visitorName,
+    String? reason,
+    String? area,
   }) async {
     if (!isConnected || _client == null) {
       return false;
@@ -513,6 +678,7 @@ class MeshtasticService extends ChangeNotifier {
           ? '$status|$supervisorName|$comment'
           : '$status|$supervisorName';
 
+      // 1) Enviar respuesta al portero
       debugPrint('📤 [RESPONSE] Enviando respuesta "$status" a nodo: $destinationNodeId');
       await _client!.sendTextMessage(message, destinationId: destinationNodeId);
 
@@ -526,10 +692,69 @@ class MeshtasticService extends ChangeNotifier {
       }
       notifyListeners();
 
+      // 2) Enviar REGISTRO al gateway para Airtable (si se proporcionaron datos)
+      if (visitorName != null && reason != null && area != null) {
+        final registroMsg = 'REGISTRO|$status|$visitorName|$reason|$area|$supervisorName|${comment ?? ''}';
+        debugPrint('📤 [REGISTRO] Esperando 3s antes de enviar al gateway...');
+        await Future.delayed(const Duration(seconds: 3));
+        debugPrint('📤 [REGISTRO] Enviando al gateway: $registroMsg');
+        await _client!.sendTextMessage(registroMsg, destinationId: currentGatewayNodeId);
+        debugPrint('✅ [REGISTRO] Enviado al gateway exitosamente');
+      }
+
       return true;
     } catch (e) {
       debugPrint('Error enviando respuesta: $e');
       return false;
+    }
+  }
+
+  /// Enviar registro de visitante al gateway para Airtable
+  Future<bool> sendRegistroToGateway({
+    required String status,
+    required String visitorName,
+    required String reason,
+    required String area,
+    required String supervisor,
+    String? comment,
+  }) async {
+    final message = 'REGISTRO|$status|$visitorName|$reason|$area|$supervisor|${comment ?? ''}';
+    debugPrint('📤 [REGISTRO] Enviando registro al gateway: $message');
+    return sendChatMessage(message, destinationId: currentGatewayNodeId);
+  }
+
+  /// Enviar salida de visitante al gateway para Airtable
+  Future<bool> sendSalidaToGateway({required String visitorName}) async {
+    final message = 'SALIDA|$visitorName';
+    debugPrint('📤 [SALIDA] Enviando salida al gateway: $message');
+    return sendChatMessage(message, destinationId: currentGatewayNodeId);
+  }
+
+  /// Agregar visitante activo (llamado desde el portero al recibir APROBADO)
+  void addActiveVisitor({
+    required String visitorName,
+    required String reason,
+    required String area,
+  }) {
+    _activeVisitors.add(ActiveVisitor(
+      visitorName: visitorName,
+      reason: reason,
+      area: area,
+      entryTime: DateTime.now(),
+    ));
+    debugPrint('✅ [VISITORS] Visitante activo agregado: $visitorName');
+    notifyListeners();
+  }
+
+  /// Marcar visitante como salido
+  void markVisitorExited(String visitorName) {
+    for (final visitor in _activeVisitors) {
+      if (visitor.visitorName == visitorName && !visitor.hasExited) {
+        visitor.exitTime = DateTime.now();
+        debugPrint('🚪 [VISITORS] Visitante marcado como salido: $visitorName');
+        notifyListeners();
+        return;
+      }
     }
   }
 
@@ -888,6 +1113,7 @@ class MeshtasticService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _stopKeepalive();
     _connectionSubscription?.cancel();
     _packetSubscription?.cancel();
     _approvalController.close();

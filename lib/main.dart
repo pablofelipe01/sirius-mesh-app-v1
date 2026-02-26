@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'services/meshtastic_service.dart';
 import 'screens/settings_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/requests_screen.dart';
 import 'models/chat_message.dart';
-import 'widgets/battery_indicator.dart';
 
 void main() {
   runApp(const SiriusPorteriaApp());
@@ -109,18 +110,63 @@ class DeviceSelectionScreen extends StatefulWidget {
 class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
   final List<ScannedDevice> _devices = [];
   bool _isScanning = false;
+  bool _permissionsGranted = false;
+  String? _permissionError;
   StreamSubscription<ScannedDevice>? _scanSubscription;
 
   @override
   void initState() {
     super.initState();
-    _startScanning();
+    _checkPermissionsAndScan();
   }
 
   @override
   void dispose() {
     _scanSubscription?.cancel();
     super.dispose();
+  }
+
+  Future<void> _checkPermissionsAndScan() async {
+    setState(() {
+      _permissionError = null;
+    });
+
+    final denied = <String>[];
+
+    if (Platform.isAndroid) {
+      // Android: permisos BLE específicos
+      final bluetoothScan = await Permission.bluetoothScan.request();
+      final bluetoothConnect = await Permission.bluetoothConnect.request();
+      final location = await Permission.locationWhenInUse.request();
+
+      // Permiso legacy (no fallar si no aplica)
+      try { await Permission.bluetooth.request(); } catch (_) {}
+
+      if (!bluetoothScan.isGranted) denied.add('Bluetooth Scan');
+      if (!bluetoothConnect.isGranted) denied.add('Bluetooth Connect');
+      if (!location.isGranted) denied.add('Ubicacion');
+    } else if (Platform.isIOS) {
+      // iOS: solo permiso de Bluetooth
+      final bluetooth = await Permission.bluetooth.request();
+      if (!bluetooth.isGranted) denied.add('Bluetooth');
+    }
+
+    if (denied.isNotEmpty) {
+      setState(() {
+        _permissionsGranted = false;
+        _permissionError = Platform.isIOS
+            ? 'Permiso de Bluetooth denegado.\nVaya a Ajustes > Sirius Porteria > Bluetooth para habilitarlo.'
+            : 'Permisos denegados: ${denied.join(", ")}.\nVaya a Configuracion > Apps > Sirius Porteria > Permisos para habilitarlos.';
+      });
+      return;
+    }
+
+    setState(() {
+      _permissionsGranted = true;
+      _permissionError = null;
+    });
+
+    _startScanning();
   }
 
   void _startScanning() {
@@ -180,27 +226,64 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
         children: [
           if (_isScanning)
             const LinearProgressIndicator(),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.bluetooth_searching,
-                  color: _isScanning ? Colors.blue : Colors.grey,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  _isScanning
-                      ? 'Buscando dispositivos Meshtastic...'
-                      : 'Dispositivos encontrados: ${_devices.length}',
-                  style: const TextStyle(fontSize: 16),
-                ),
-              ],
+          // Error de permisos
+          if (_permissionError != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(16),
+              color: Colors.red.shade50,
+              child: Column(
+                children: [
+                  const Icon(Icons.warning_amber, color: Colors.red, size: 48),
+                  const SizedBox(height: 12),
+                  Text(
+                    _permissionError!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.red.shade700, fontSize: 14),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () => openAppSettings(),
+                        icon: const Icon(Icons.settings),
+                        label: const Text('Abrir Configuracion'),
+                      ),
+                      const SizedBox(width: 12),
+                      OutlinedButton.icon(
+                        onPressed: _checkPermissionsAndScan,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Reintentar'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ),
-          const Divider(height: 1),
+          if (_permissionsGranted) ...[
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.bluetooth_searching,
+                    color: _isScanning ? Colors.blue : Colors.grey,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    _isScanning
+                        ? 'Buscando dispositivos Meshtastic...'
+                        : 'Dispositivos encontrados: ${_devices.length}',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+          ],
           Expanded(
-            child: _devices.isEmpty
+            child: _devices.isEmpty && _permissionsGranted
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -273,7 +356,7 @@ class MainScreen extends StatefulWidget {
   State<MainScreen> createState() => _MainScreenState();
 }
 
-class _MainScreenState extends State<MainScreen> {
+class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   int _currentIndex = 0;
 
   MeshtasticService get _service => widget.meshtasticService;
@@ -281,14 +364,27 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _service.addListener(_onServiceChange);
     _connectToDevice();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _service.removeListener(_onServiceChange);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // La app volvió al primer plano — verificar conexión BLE
+      if (!_service.isConnected) {
+        debugPrint('📱 [LIFECYCLE] App resumed, reconectando...');
+        _service.connectToSavedDevice();
+      }
+    }
   }
 
   void _onServiceChange() {
@@ -410,6 +506,10 @@ class _FormScreenState extends State<FormScreen> {
   bool _waitingResponse = false;
   VisitorResponse? _response;
   StreamSubscription<VisitorResponse>? _responseSubscription;
+  // Datos del visitante actual (para agregar a activos al aprobar)
+  String? _pendingVisitorName;
+  String? _pendingReason;
+  String? _pendingArea;
 
   final List<String> _reasons = ['Motivo 1', 'Motivo 2', 'Motivo 3'];
   final List<String> _areas = ['Área 1', 'Área 2', 'Área 3'];
@@ -419,7 +519,7 @@ class _FormScreenState extends State<FormScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedNode = _service.gatewayNode; // Gateway pregrabado por defecto
+    _selectedNode = _service.currentGatewayNode; // Gateway configurado por defecto
     _service.addListener(_onConnectionChange);
     _responseSubscription = _service.responseStream.listen(_onResponse);
   }
@@ -443,6 +543,19 @@ class _FormScreenState extends State<FormScreen> {
         _isSending = false;
         _waitingResponse = false;
       });
+
+      // Si fue aprobado, agregar a visitantes activos y auto-resetear
+      if (response.isApproved && _pendingVisitorName != null) {
+        _service.addActiveVisitor(
+          visitorName: _pendingVisitorName!,
+          reason: _pendingReason ?? '',
+          area: _pendingArea ?? '',
+        );
+        // Auto-resetear formulario después de 3 segundos
+        Future.delayed(const Duration(seconds: 3), () {
+          if (mounted) _resetForm();
+        });
+      }
     }
   }
 
@@ -455,6 +568,9 @@ class _FormScreenState extends State<FormScreen> {
       _response = null;
       _isSending = false;
       _waitingResponse = false;
+      _pendingVisitorName = null;
+      _pendingReason = null;
+      _pendingArea = null;
     });
   }
 
@@ -475,6 +591,9 @@ class _FormScreenState extends State<FormScreen> {
       _isSending = true;
       _waitingResponse = true;
       _response = null;
+      _pendingVisitorName = _nameController.text.trim();
+      _pendingReason = _selectedReason;
+      _pendingArea = _selectedArea;
     });
 
     final success = await _service.sendVisitRequest(
@@ -509,40 +628,35 @@ class _FormScreenState extends State<FormScreen> {
   Widget _buildConnectionStatus() {
     IconData icon;
     Color color;
+    String tooltip;
 
     switch (_service.status) {
       case ConnectionStatus.connected:
         icon = Icons.bluetooth_connected;
         color = Colors.green;
+        tooltip = 'Conectado';
         break;
       case ConnectionStatus.connecting:
       case ConnectionStatus.scanning:
         icon = Icons.bluetooth_searching;
         color = Colors.orange;
+        tooltip = _service.statusMessage;
         break;
       case ConnectionStatus.error:
         icon = Icons.bluetooth_disabled;
         color = Colors.red;
+        tooltip = 'Error';
         break;
       case ConnectionStatus.disconnected:
         icon = Icons.bluetooth;
         color = Colors.grey;
+        tooltip = 'Desconectado';
         break;
     }
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 20),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            _service.statusMessage,
-            style: TextStyle(color: color, fontSize: 12),
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
+    return Tooltip(
+      message: tooltip,
+      child: Icon(icon, color: color, size: 22),
     );
   }
 
@@ -654,6 +768,13 @@ class _FormScreenState extends State<FormScreen> {
                 ),
               ),
             ],
+            if (isApproved) ...[
+              const SizedBox(height: 8),
+              Text(
+                'El visitante aparece en la lista de abajo',
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+              ),
+            ],
             const SizedBox(height: 16),
             ElevatedButton.icon(
               onPressed: _resetForm,
@@ -670,6 +791,96 @@ class _FormScreenState extends State<FormScreen> {
     );
   }
 
+  Future<void> _registerVisitorExit(ActiveVisitor visitor) async {
+    final success = await _service.sendSalidaToGateway(visitorName: visitor.visitorName);
+    if (success) {
+      _service.markVisitorExited(visitor.visitorName);
+      _showSnackBar('Salida registrada: ${visitor.visitorName}');
+    } else {
+      _showSnackBar('Error al registrar salida');
+    }
+  }
+
+  Widget _buildActiveVisitors() {
+    final visitors = _service.allVisitors;
+    if (visitors.isEmpty) return const SizedBox.shrink();
+
+    // Mostrar activos primero, luego los que ya salieron (hoy)
+    final active = visitors.where((v) => !v.hasExited).toList();
+    final exited = visitors.where((v) => v.hasExited).toList();
+    final sorted = [...active, ...exited];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(height: 32),
+        Row(
+          children: [
+            const Icon(Icons.people, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              'Visitantes (${active.length} activos)',
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ...sorted.map((visitor) => Card(
+          elevation: 2,
+          color: visitor.hasExited ? Colors.grey.shade100 : Colors.green.shade50,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(
+                  visitor.hasExited ? Icons.logout : Icons.person,
+                  color: visitor.hasExited ? Colors.grey : Colors.green,
+                  size: 28,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        visitor.visitorName,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          decoration: visitor.hasExited ? TextDecoration.lineThrough : null,
+                        ),
+                      ),
+                      Text(
+                        '${visitor.area} — Entrada: ${visitor.formattedEntryTime}',
+                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                      ),
+                      if (visitor.hasExited)
+                        Text(
+                          'Salida: ${visitor.formattedExitTime}',
+                          style: TextStyle(fontSize: 12, color: Colors.blue.shade700),
+                        ),
+                    ],
+                  ),
+                ),
+                if (!visitor.hasExited)
+                  ElevatedButton.icon(
+                    onPressed: () => _registerVisitorExit(visitor),
+                    icon: const Icon(Icons.logout, size: 18),
+                    label: const Text('Salida'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        )),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -677,11 +888,12 @@ class _FormScreenState extends State<FormScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Registro de Visitantes'),
+            const Text('Registro de Visitantes', style: TextStyle(fontSize: 18)),
             if (_service.connectedDeviceName != null)
               Text(
                 _service.connectedDeviceName!,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.normal),
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal),
+                overflow: TextOverflow.ellipsis,
               ),
           ],
         ),
@@ -724,7 +936,8 @@ class _FormScreenState extends State<FormScreen> {
               const SizedBox(height: 16),
 
               DropdownButtonFormField<String>(
-                initialValue: _selectedReason,
+                value: _selectedReason,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Motivo de Visita',
                   border: OutlineInputBorder(),
@@ -743,7 +956,8 @@ class _FormScreenState extends State<FormScreen> {
               const SizedBox(height: 16),
 
               DropdownButtonFormField<String>(
-                initialValue: _selectedArea,
+                value: _selectedArea,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Área a Visitar',
                   border: OutlineInputBorder(),
@@ -763,7 +977,8 @@ class _FormScreenState extends State<FormScreen> {
 
               // Selector de nodo destino
               DropdownButtonFormField<MeshNode>(
-                initialValue: _selectedNode,
+                value: _selectedNode,
+                isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Enviar a (Nodo Destino)',
                   border: OutlineInputBorder(),
@@ -773,21 +988,9 @@ class _FormScreenState extends State<FormScreen> {
                 items: _service.onlineNodes.map((node) {
                   return DropdownMenuItem(
                     value: node,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${node.displayName} (${node.shortId})',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        BatteryIndicator(
-                          batteryLevel: node.batteryLevel,
-                          iconSize: 16,
-                          showPercentage: false,
-                        ),
-                      ],
+                    child: Text(
+                      '${node.displayName} (${node.shortId})',
+                      overflow: TextOverflow.ellipsis,
                     ),
                   );
                 }).toList(),
@@ -835,6 +1038,8 @@ class _FormScreenState extends State<FormScreen> {
               const SizedBox(height: 24),
 
               _buildResponseCard(),
+
+              _buildActiveVisitors(),
 
               if (_service.status == ConnectionStatus.error ||
                   _service.status == ConnectionStatus.disconnected)

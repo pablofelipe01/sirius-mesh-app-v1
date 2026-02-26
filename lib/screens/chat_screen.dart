@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/chat_message.dart';
 import '../services/meshtastic_service.dart';
-import '../widgets/battery_indicator.dart';
 import '../widgets/delivery_indicator.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -34,14 +33,12 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
-    debugPrint('🖥️ [CHAT_SCREEN] initState - Suscribiendo a messageStream...');
     _service.addListener(_onServiceChange);
     _messageSubscription = _service.messageStream.listen(
       _onNewMessage,
       onError: (e) => debugPrint('❌ [CHAT_SCREEN] Error en messageStream: $e'),
       onDone: () => debugPrint('⚠️ [CHAT_SCREEN] messageStream cerrado'),
     );
-    debugPrint('✅ [CHAT_SCREEN] Suscripción a messageStream completada');
     _updateFilteredMessages();
     _messageController.addListener(_onTextChanged);
   }
@@ -67,15 +64,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onNewMessage(ChatMessage message) {
-    debugPrint('📬 [CHAT_SCREEN] Mensaje recibido en UI: "${message.messageText}"');
-    debugPrint('📬 [CHAT_SCREEN] De: ${message.fromNodeName}, Canal: ${message.channel}, isDM: ${message.isDirectMessage}');
-    debugPrint('📬 [CHAT_SCREEN] toNodeId: ${message.toNodeId}, fromNodeId: ${message.fromNodeId}');
-    debugPrint('📬 [CHAT_SCREEN] Destino actual: ${_selectedDestination.displayName} (isChannel: ${_selectedDestination.isChannel})');
-    debugPrint('📬 [CHAT_SCREEN] Actualizando lista de mensajes...');
     _updateFilteredMessages();
-    debugPrint('📬 [CHAT_SCREEN] Mensajes filtrados: ${_filteredMessages.length}');
     _scrollToBottom();
-    debugPrint('✅ [CHAT_SCREEN] UI actualizada');
   }
 
   void _updateFilteredMessages() {
@@ -131,15 +121,20 @@ class _ChatScreenState extends State<ChatScreen> {
       value: ChatDestination.primaryChannel,
       child: Row(
         children: [
-          const Text('📢 '),
-          Text(ChatDestination.primaryChannel.displayName),
-          if (ch0Unread) ...[
-            const SizedBox(width: 6),
+          const Icon(Icons.campaign, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Canal 0: Primary',
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (ch0Unread)
             Container(
               width: 8, height: 8,
+              margin: const EdgeInsets.only(left: 4),
               decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
             ),
-          ],
         ],
       ),
     ));
@@ -149,62 +144,53 @@ class _ChatScreenState extends State<ChatScreen> {
       value: ChatDestination.supervisorsChannel,
       child: Row(
         children: [
-          const Text('🔒 '),
-          Text(ChatDestination.supervisorsChannel.displayName),
-          if (ch1Unread) ...[
-            const SizedBox(width: 6),
+          const Icon(Icons.lock, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Canal 1: Supervisores',
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (ch1Unread)
             Container(
               width: 8, height: 8,
+              margin: const EdgeInsets.only(left: 4),
               decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
             ),
-          ],
         ],
       ),
     ));
 
-    // Nodos online
+    // Nodos online (DMs)
     final onlineNodes = _service.onlineNodes;
-    if (onlineNodes.isNotEmpty) {
-      items.add(const DropdownMenuItem(
-        enabled: false,
-        value: null,
-        child: Divider(),
+    for (final node in onlineNodes) {
+      final destination = ChatDestination.directMessage(node);
+      final hasUnread = _service.hasUnreadFromNode(node.nodeId);
+      items.add(DropdownMenuItem(
+        value: destination,
+        child: Row(
+          children: [
+            const Icon(Icons.person, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                node.displayName,
+                overflow: TextOverflow.ellipsis,
+                style: hasUnread
+                    ? const TextStyle(fontWeight: FontWeight.bold)
+                    : null,
+              ),
+            ),
+            if (hasUnread)
+              Container(
+                width: 8, height: 8,
+                margin: const EdgeInsets.only(left: 4),
+                decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+              ),
+          ],
+        ),
       ));
-
-      for (final node in onlineNodes) {
-        final destination = ChatDestination.directMessage(node);
-        final hasUnread = _service.hasUnreadFromNode(node.nodeId);
-        items.add(DropdownMenuItem(
-          value: destination,
-          child: Row(
-            children: [
-              const Text('👤 '),
-              Expanded(
-                child: Text(
-                  'DM: ${node.displayName} (${node.shortId})',
-                  overflow: TextOverflow.ellipsis,
-                  style: hasUnread
-                      ? const TextStyle(fontWeight: FontWeight.bold)
-                      : null,
-                ),
-              ),
-              if (hasUnread) ...[
-                const SizedBox(width: 4),
-                Container(
-                  width: 8, height: 8,
-                  decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                ),
-              ],
-              const SizedBox(width: 4),
-              BatteryIndicator(
-                batteryLevel: node.batteryLevel,
-                iconSize: 16,
-                showPercentage: false,
-              ),
-            ],
-          ),
-        ));
-      }
     }
 
     return items;
@@ -230,10 +216,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 child: Text(
                   message.formattedDate,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey.shade700,
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                 ),
               ),
             ),
@@ -252,12 +235,13 @@ class _ChatScreenState extends State<ChatScreen> {
                 Padding(
                   padding: const EdgeInsets.only(left: 12, bottom: 2),
                   child: Text(
-                    '${message.fromNodeName} (!${message.fromNodeId.toRadixString(16)})',
+                    message.fromNodeName,
                     style: TextStyle(
                       fontSize: 11,
                       color: Colors.grey.shade600,
                       fontWeight: FontWeight.w500,
                     ),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               Container(
@@ -283,25 +267,17 @@ class _ChatScreenState extends State<ChatScreen> {
                             padding: const EdgeInsets.only(right: 6),
                             child: Text(
                               'CH${message.channel}',
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey.shade500,
-                              ),
+                              style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
                             ),
                           ),
                         Text(
                           message.formattedTime,
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.grey.shade500,
-                          ),
+                          style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
                         ),
                         if (message.isMine)
                           Padding(
                             padding: const EdgeInsets.only(left: 4),
-                            child: DeliveryIndicator(
-                              status: message.deliveryStatus,
-                            ),
+                            child: DeliveryIndicator(status: message.deliveryStatus),
                           ),
                       ],
                     ),
@@ -321,26 +297,19 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.chat_bubble_outline,
-              size: 64,
-              color: Colors.grey.shade400,
-            ),
+            Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey.shade400),
             const SizedBox(height: 16),
             Text(
               'No hay mensajes',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.grey.shade600,
-              ),
+              style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
             ),
             const SizedBox(height: 8),
-            Text(
-              'Los mensajes de ${_selectedDestination.displayName}\naparecerán aquí',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.grey.shade500,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                'Los mensajes aparecerán aquí',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, color: Colors.grey.shade500),
               ),
             ),
           ],
@@ -362,7 +331,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildInputArea() {
-    final destinationName = _selectedDestination.displayName;
     final maxBytes = MeshtasticService.maxMessageBytes;
     final byteCountColor = _isMessageTooLong ? Colors.red : Colors.grey.shade600;
     final canSend = _service.isConnected && !_isSending && !_isMessageTooLong;
@@ -389,7 +357,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: TextField(
                     controller: _messageController,
                     decoration: InputDecoration(
-                      hintText: 'Mensaje a $destinationName',
+                      hintText: 'Mensaje...',
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                         borderSide: _isMessageTooLong
@@ -462,32 +430,37 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          // Selector de destino
+          // Selector de destino — DropdownButton simple (no FormField)
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
               color: Colors.white,
               border: Border(
                 bottom: BorderSide(color: Colors.grey.shade200),
               ),
             ),
-            child: DropdownButtonFormField<ChatDestination>(
-              initialValue: _selectedDestination,
+            child: InputDecorator(
               decoration: InputDecoration(
                 labelText: 'Enviar a',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               ),
-              items: _buildDestinationItems(),
-              onChanged: (value) {
-                if (value != null) {
-                  _service.clearUnreadForDestination(value);
-                  setState(() => _selectedDestination = value);
-                  _updateFilteredMessages();
-                }
-              },
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<ChatDestination>(
+                  value: _selectedDestination,
+                  isExpanded: true,
+                  items: _buildDestinationItems(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      _service.clearUnreadForDestination(value);
+                      setState(() => _selectedDestination = value);
+                      _updateFilteredMessages();
+                    }
+                  },
+                ),
+              ),
             ),
           ),
 

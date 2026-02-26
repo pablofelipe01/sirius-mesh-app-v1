@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -102,17 +103,36 @@ class MeshtasticClient {
 
   /// Request necessary permissions for BLE
   Future<void> _requestPermissions() async {
-    final permissions = [
-      Permission.bluetooth,
-      Permission.bluetoothConnect,
-      Permission.bluetoothScan,
-      Permission.locationWhenInUse,
-    ];
+    if (Platform.isAndroid) {
+      // Android: permisos específicos BLE (Android 12+)
+      final requiredPermissions = [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+        Permission.locationWhenInUse,
+      ];
 
-    for (final permission in permissions) {
-      final status = await permission.request();
+      for (final permission in requiredPermissions) {
+        final status = await permission.request();
+        if (!status.isGranted) {
+          _logger.warning('Permission denied: $permission (status: $status)');
+          throw PermissionException(
+            'Permiso denegado: $permission. Vaya a Configuración > Apps > Sirius Portería > Permisos para habilitarlo.',
+          );
+        }
+      }
+
+      // Permiso legacy (Android < 12) — no fallar si no aplica
+      try {
+        await Permission.bluetooth.request();
+      } catch (_) {}
+    } else if (Platform.isIOS) {
+      // iOS: solo necesita permiso de Bluetooth
+      final status = await Permission.bluetooth.request();
       if (!status.isGranted) {
-        throw PermissionException('Permission denied: $permission');
+        _logger.warning('Bluetooth permission denied on iOS (status: $status)');
+        throw PermissionException(
+          'Permiso de Bluetooth denegado. Vaya a Ajustes > Sirius Portería > Bluetooth para habilitarlo.',
+        );
       }
     }
   }
@@ -229,8 +249,10 @@ class MeshtasticClient {
         'notify=${_fromNumChar!.properties.notify}',
       );
 
-      // Set MTU to 512
-      await device.requestMtu(512);
+      // Set MTU to 512 (solo Android — en iOS se negocia automáticamente)
+      if (Platform.isAndroid) {
+        await device.requestMtu(512);
+      }
 
       // Enable notifications on FromNum
       await _fromNumChar!.setNotifyValue(true);
@@ -549,6 +571,20 @@ class MeshtasticClient {
       }
     } catch (e) {
       _logger.warning('Error reading from FromRadio: $e');
+    }
+  }
+
+  /// Perform a lightweight BLE read to keep the connection alive.
+  /// Call this periodically (~15s) to prevent iOS from dropping idle connections.
+  Future<void> keepAlive() async {
+    if (!isConnected || _fromRadioChar == null) return;
+    try {
+      final data = await _fromRadioChar!.read();
+      if (data.isNotEmpty) {
+        await _processFromRadioData(data);
+      }
+    } catch (e) {
+      _logger.fine('Keepalive read: $e');
     }
   }
 

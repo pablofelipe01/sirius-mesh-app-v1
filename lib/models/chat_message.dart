@@ -103,6 +103,7 @@ class VisitorRequest {
   final DateTime timestamp;
   bool isResponded;
   String? responseStatus; // APROBADO, NEGADO, PENDIENTE
+  DateTime? exitTime;
 
   VisitorRequest({
     required this.requestId,
@@ -114,6 +115,7 @@ class VisitorRequest {
     required this.timestamp,
     this.isResponded = false,
     this.responseStatus,
+    this.exitTime,
   });
 
   String get formattedTime {
@@ -126,6 +128,13 @@ class VisitorRequest {
     final day = timestamp.day.toString().padLeft(2, '0');
     final month = timestamp.month.toString().padLeft(2, '0');
     return '$day/$month';
+  }
+
+  String? get formattedExitTime {
+    if (exitTime == null) return null;
+    final hour = exitTime!.hour.toString().padLeft(2, '0');
+    final minute = exitTime!.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
   }
 }
 
@@ -148,6 +157,36 @@ class VisitorResponse {
   bool get isApproved => status == 'APROBADO';
   bool get isDenied => status == 'NEGADO';
   bool get isPending => status == 'PENDIENTE';
+}
+
+class ActiveVisitor {
+  final String visitorName;
+  final String reason;
+  final String area;
+  final DateTime entryTime;
+  DateTime? exitTime;
+
+  ActiveVisitor({
+    required this.visitorName,
+    required this.reason,
+    required this.area,
+    required this.entryTime,
+  });
+
+  bool get hasExited => exitTime != null;
+
+  String get formattedEntryTime {
+    final hour = entryTime.hour.toString().padLeft(2, '0');
+    final minute = entryTime.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  String? get formattedExitTime {
+    if (exitTime == null) return null;
+    final hour = exitTime!.hour.toString().padLeft(2, '0');
+    final minute = exitTime!.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
 }
 
 class ChatDestination {

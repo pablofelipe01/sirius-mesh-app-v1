@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/chat_message.dart';
 import '../services/meshtastic_service.dart';
 import '../widgets/battery_indicator.dart';
 
@@ -20,6 +21,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   LoraRegion _selectedRegion = LoraRegion.unset;
+  int? _selectedGatewayNodeId;
   bool _isApplyingConfig = false;
 
   MeshtasticService get _service => widget.meshtasticService;
@@ -29,6 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _service.addListener(_onServiceChange);
     _loadSavedRegion();
+    _loadSavedGateway();
   }
 
   @override
@@ -46,6 +49,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _selectedRegion = region);
   }
 
+  Future<void> _loadSavedGateway() async {
+    final nodeId = await _service.getSavedGatewayNodeId();
+    setState(() => _selectedGatewayNodeId = nodeId);
+  }
+
   Future<void> _applyConfiguration() async {
     setState(() => _isApplyingConfig = true);
 
@@ -55,13 +63,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (!mounted) return;
 
+    final message = success
+        ? (_service.isConnected
+            ? 'Configuración aplicada correctamente'
+            : 'Región guardada. Se aplicará al conectar un dispositivo.')
+        : 'Error al guardar configuración';
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          success
-              ? 'Configuración aplicada correctamente'
-              : 'Error al aplicar configuración',
-        ),
+        content: Text(message),
         backgroundColor: success ? Colors.green : Colors.red,
       ),
     );
@@ -179,7 +189,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildInfoRow(String label, String value, {Color? valueColor}) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Text(
           label,
@@ -188,15 +197,96 @@ class _SettingsScreenState extends State<SettingsScreen> {
             fontSize: 14,
           ),
         ),
-        Text(
-          value,
-          style: TextStyle(
-            fontWeight: FontWeight.w500,
-            fontSize: 14,
-            color: valueColor,
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontWeight: FontWeight.w500,
+              fontSize: 14,
+              color: valueColor,
+            ),
+            textAlign: TextAlign.end,
+            overflow: TextOverflow.ellipsis,
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildGatewaySection() {
+    final nodes = _service.onlineNodes;
+    // Encontrar el nodo seleccionado en la lista actual
+    final selectedNode = nodes.cast<MeshNode?>().firstWhere(
+      (n) => n!.nodeId == _selectedGatewayNodeId,
+      orElse: () => null,
+    );
+
+    return Card(
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.cell_tower, color: Colors.teal),
+                SizedBox(width: 12),
+                Text(
+                  'Gateway',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            const Divider(),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<MeshNode>(
+              value: selectedNode,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Nodo Gateway',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.router),
+              ),
+              hint: const Text('Seleccione el gateway'),
+              items: nodes.map((node) {
+                return DropdownMenuItem(
+                  value: node,
+                  child: Text(
+                    '${node.displayName} (${node.shortId})',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                );
+              }).toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _selectedGatewayNodeId = value.nodeId);
+                  _service.saveGatewayNodeId(value.nodeId);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Gateway: ${value.displayName}'),
+                      backgroundColor: Colors.teal,
+                    ),
+                  );
+                }
+              },
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Los mensajes REGISTRO y SALIDA se envian a este nodo',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey.shade600,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -224,7 +314,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Divider(),
             const SizedBox(height: 8),
             DropdownButtonFormField<LoraRegion>(
-              initialValue: _selectedRegion,
+              value: _selectedRegion,
+              isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Región LoRa',
                 border: OutlineInputBorder(),
@@ -246,7 +337,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _service.isConnected && !_isApplyingConfig
+                onPressed: !_isApplyingConfig
                     ? _applyConfiguration
                     : null,
                 icon: _isApplyingConfig
@@ -273,7 +364,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 8.0),
                 child: Text(
-                  'Conecta un dispositivo para aplicar configuración',
+                  'Sin conexión — la región se guardará localmente',
                   style: TextStyle(
                     fontSize: 12,
                     color: Colors.grey.shade600,
@@ -341,6 +432,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Column(
           children: [
             _buildNodeInfoSection(),
+            const SizedBox(height: 16),
+            _buildGatewaySection(),
             const SizedBox(height: 16),
             _buildLoraConfigSection(),
             const SizedBox(height: 16),

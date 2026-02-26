@@ -63,6 +63,10 @@ class _RequestsScreenState extends State<RequestsScreen> {
       status: status,
       supervisorName: _service.connectedDeviceName ?? 'Supervisor',
       comment: comment.isNotEmpty ? comment : null,
+      // Datos del visitante para REGISTRO al gateway
+      visitorName: request.visitorName,
+      reason: request.reason,
+      area: request.area,
     );
 
     if (success) {
@@ -153,7 +157,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
                     children: [
                       Icon(Icons.description, size: 16, color: Colors.grey.shade600),
                       const SizedBox(width: 4),
-                      Text(request.reason, style: const TextStyle(fontSize: 14)),
+                      Flexible(child: Text(request.reason, style: const TextStyle(fontSize: 14), overflow: TextOverflow.ellipsis)),
                     ],
                   ),
                 ),
@@ -162,7 +166,7 @@ class _RequestsScreenState extends State<RequestsScreen> {
                     children: [
                       Icon(Icons.location_on, size: 16, color: Colors.grey.shade600),
                       const SizedBox(width: 4),
-                      Text(request.area, style: const TextStyle(fontSize: 14)),
+                      Flexible(child: Text(request.area, style: const TextStyle(fontSize: 14), overflow: TextOverflow.ellipsis)),
                     ],
                   ),
                 ),
@@ -176,9 +180,12 @@ class _RequestsScreenState extends State<RequestsScreen> {
               children: [
                 Icon(Icons.router, size: 16, color: Colors.grey.shade600),
                 const SizedBox(width: 4),
-                Text(
-                  'De: ${request.fromNodeName}',
-                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                Flexible(
+                  child: Text(
+                    'De: ${request.fromNodeName}',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
