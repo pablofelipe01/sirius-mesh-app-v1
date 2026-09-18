@@ -65,8 +65,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final message = success
         ? (_service.isConnected
-            ? 'Configuración aplicada correctamente'
-            : 'Región guardada. Se aplicará al conectar un dispositivo.')
+              ? 'Configuración aplicada correctamente'
+              : 'Región guardada. Se aplicará al conectar un dispositivo.')
         : 'Error al guardar configuración';
 
     ScaffoldMessenger.of(context).showSnackBar(
@@ -110,6 +110,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.onDeviceChange();
   }
 
+  Future<void> _clearStoredData() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Borrar todos los datos'),
+        content: const Text(
+          'Esto eliminará permanentemente:\n\n'
+          '• Visitantes activos y registrados\n'
+          '• Solicitudes pendientes y respondidas\n'
+          '• Historial completo de chat\n\n'
+          'La configuración del nodo, gateway y región LoRa se mantienen.\n\n'
+          '¿Continuar?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Borrar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _service.clearAllData();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Datos borrados'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Widget _buildNodeInfoSection() {
     final deviceName = _service.connectedDeviceName ?? 'Desconocido';
     final deviceMac = _service.connectedDeviceMac ?? 'N/A';
@@ -131,10 +170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SizedBox(width: 12),
                 const Text(
                   'Nodo Conectado',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -155,10 +191,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(
                   'Bateria',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontSize: 14,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
                 ),
                 BatteryIndicator(
                   batteryLevel: _service.connectedNodeBatteryLevel,
@@ -192,10 +225,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: [
         Text(
           label,
-          style: TextStyle(
-            color: Colors.grey.shade600,
-            fontSize: 14,
-          ),
+          style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -235,10 +265,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SizedBox(width: 12),
                 Text(
                   'Gateway',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -304,10 +331,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SizedBox(width: 12),
                 Text(
                   'Configuración LoRa',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -337,9 +361,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: !_isApplyingConfig
-                    ? _applyConfiguration
-                    : null,
+                onPressed: !_isApplyingConfig ? _applyConfiguration : null,
                 icon: _isApplyingConfig
                     ? const SizedBox(
                         width: 20,
@@ -392,10 +414,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 SizedBox(width: 12),
                 Text(
                   'Acciones',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -412,6 +431,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _clearStoredData,
+                icon: const Icon(Icons.delete_forever),
+                label: const Text('Borrar Datos Almacenados'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                  side: const BorderSide(color: Colors.red),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Elimina visitantes, solicitudes y chat. No afecta la configuración.',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey.shade600,
+                fontStyle: FontStyle.italic,
               ),
             ),
           ],

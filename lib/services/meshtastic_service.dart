@@ -11,11 +11,15 @@ const String _savedDeviceAddressKey = 'saved_device_address';
 const String _savedDeviceNameKey = 'saved_device_name';
 const String _loraRegionKey = 'lora_region';
 const String _gatewayNodeIdKey = 'gateway_node_id';
+const String _activeVisitorsKey = 'active_visitors';
+const String _pendingRequestsKey = 'pending_requests';
+const String _messageHistoryKey = 'message_history';
+const String _lastSessionDateKey = 'last_session_date';
 const int _maxMessageHistory = 100;
 
 // Nodos pregrabados
-const int gatewayNodeId = 0x9ea29bc4;
-const String gatewayNodeName = 'Mission Pack';
+const int gatewayNodeId = 0x49b54674;
+const String gatewayNodeName = 'Gateway Jetson';
 const int pabloANodeId = 0x7c1a5974;
 const String pabloANodeName = 'Pablo A';
 const int pabloLongNodeId = 0xf515b946;
@@ -110,6 +114,7 @@ class MeshtasticService extends ChangeNotifier {
       _knownNodes[entry.nodeId] = entry;
     }
     _loadSavedGatewayNodeId();
+    _loadPersistedState();
   }
 
   static final List<MeshNode> _preloadedNodes = [
@@ -208,6 +213,7 @@ class MeshtasticService extends ChangeNotifier {
   /// Limpia el historial de mensajes (útil para eliminar mensajes basura)
   void clearMessageHistory() {
     _messageHistory.clear();
+    _saveMessageHistory();
     notifyListeners();
     debugPrint('🗑️ [SERVICE] Historial de mensajes limpiado');
   }
@@ -321,6 +327,140 @@ class MeshtasticService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_gatewayNodeIdKey, nodeId);
     _selectedGatewayNodeId = nodeId;
+    notifyListeners();
+  }
+
+  // ========== PERSISTENCIA DE ESTADO ==========
+
+  /// Carga visitantes, solicitudes y chat desde SharedPreferences.
+  /// Si la última sesión fue en otro día, limpia los visitantes ya salidos.
+  Future<void> _loadPersistedState() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Cargar visitantes
+      final visitorsJson = prefs.getString(_activeVisitorsKey);
+      if (visitorsJson != null) {
+        final decoded = jsonDecode(visitorsJson) as List<dynamic>;
+        _activeVisitors.clear();
+        for (final item in decoded) {
+          _activeVisitors.add(
+            ActiveVisitor.fromJson(item as Map<String, dynamic>),
+          );
+        }
+      }
+
+      // Cargar solicitudes
+      final requestsJson = prefs.getString(_pendingRequestsKey);
+      if (requestsJson != null) {
+        final decoded = jsonDecode(requestsJson) as List<dynamic>;
+        _pendingRequests.clear();
+        for (final item in decoded) {
+          _pendingRequests.add(
+            VisitorRequest.fromJson(item as Map<String, dynamic>),
+          );
+        }
+      }
+
+      // Cargar historial de chat
+      final messagesJson = prefs.getString(_messageHistoryKey);
+      if (messagesJson != null) {
+        final decoded = jsonDecode(messagesJson) as List<dynamic>;
+        _messageHistory.clear();
+        for (final item in decoded) {
+          _messageHistory.add(
+            ChatMessage.fromJson(item as Map<String, dynamic>),
+          );
+        }
+      }
+
+      // Limpieza diaria — si la última sesión fue otro día,
+      // borrar visitantes ya salidos (los activos se mantienen).
+      final lastDateStr = prefs.getString(_lastSessionDateKey);
+      final today = _dateKey(DateTime.now());
+      if (lastDateStr != null && lastDateStr != today) {
+        final before = _activeVisitors.length;
+        _activeVisitors.removeWhere((v) => v.hasExited);
+        // Solicitudes ya respondidas también se limpian al cambiar de día.
+        _pendingRequests.removeWhere((r) => r.isResponded);
+        debugPrint(
+          '🗓️ [DAILY_CLEANUP] Cambio de día detectado. Visitantes: $before → ${_activeVisitors.length}',
+        );
+        await _saveActiveVisitors();
+        await _savePendingRequests();
+      }
+      await prefs.setString(_lastSessionDateKey, today);
+
+      debugPrint(
+        '✅ [PERSIST] Estado cargado — visitantes: ${_activeVisitors.length}, solicitudes: ${_pendingRequests.length}, mensajes: ${_messageHistory.length}',
+      );
+      notifyListeners();
+    } catch (e, st) {
+      debugPrint('❌ [PERSIST] Error cargando estado: $e\n$st');
+    }
+  }
+
+  String _dateKey(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  Future<void> _saveActiveVisitors() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(
+        _activeVisitors.map((v) => v.toJson()).toList(),
+      );
+      await prefs.setString(_activeVisitorsKey, encoded);
+    } catch (e) {
+      debugPrint('❌ [PERSIST] Error guardando visitantes: $e');
+    }
+  }
+
+  Future<void> _savePendingRequests() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(
+        _pendingRequests.map((r) => r.toJson()).toList(),
+      );
+      await prefs.setString(_pendingRequestsKey, encoded);
+    } catch (e) {
+      debugPrint('❌ [PERSIST] Error guardando solicitudes: $e');
+    }
+  }
+
+  Future<void> _saveMessageHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final encoded = jsonEncode(
+        _messageHistory.map((m) => m.toJson()).toList(),
+      );
+      await prefs.setString(_messageHistoryKey, encoded);
+    } catch (e) {
+      debugPrint('❌ [PERSIST] Error guardando mensajes: $e');
+    }
+  }
+
+  /// Borra TODA la data almacenada (visitantes, solicitudes, chat).
+  /// No toca la configuración (dispositivo, gateway, región LoRa).
+  Future<void> clearAllData() async {
+    _activeVisitors.clear();
+    _pendingRequests.clear();
+    _messageHistory.clear();
+    _nodesWithUnread.clear();
+    _channelsWithUnread.clear();
+    _unreadChatCount = 0;
+    _pendingDeliveries.clear();
+    _processedPacketIds.clear();
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_activeVisitorsKey);
+      await prefs.remove(_pendingRequestsKey);
+      await prefs.remove(_messageHistoryKey);
+    } catch (e) {
+      debugPrint('❌ [PERSIST] Error borrando datos: $e');
+    }
+
+    debugPrint('🗑️ [PERSIST] Toda la data fue borrada');
     notifyListeners();
   }
 
@@ -690,6 +830,7 @@ class MeshtasticService extends ChangeNotifier {
           break;
         }
       }
+      _savePendingRequests();
       notifyListeners();
 
       // 2) Enviar REGISTRO al gateway para Airtable (si se proporcionaron datos)
@@ -743,6 +884,7 @@ class MeshtasticService extends ChangeNotifier {
       entryTime: DateTime.now(),
     ));
     debugPrint('✅ [VISITORS] Visitante activo agregado: $visitorName');
+    _saveActiveVisitors();
     notifyListeners();
   }
 
@@ -752,6 +894,7 @@ class MeshtasticService extends ChangeNotifier {
       if (visitor.visitorName == visitorName && !visitor.hasExited) {
         visitor.exitTime = DateTime.now();
         debugPrint('🚪 [VISITORS] Visitante marcado como salido: $visitorName');
+        _saveActiveVisitors();
         notifyListeners();
         return;
       }
@@ -767,6 +910,7 @@ class MeshtasticService extends ChangeNotifier {
         break;
       }
     }
+    _savePendingRequests();
     notifyListeners();
   }
 
@@ -907,6 +1051,7 @@ class MeshtasticService extends ChangeNotifier {
           debugPrint('📋 [REQUEST] Solicitud de visitante recibida: ${parts[1]}');
           _pendingRequests.add(request);
           _requestController.add(request);
+          _savePendingRequests();
           notifyListeners(); // Para actualizar badge
         }
         // NO agregar al chat normal - terminar aquí
@@ -1055,6 +1200,7 @@ class MeshtasticService extends ChangeNotifier {
     while (_messageHistory.length > _maxMessageHistory) {
       _messageHistory.removeAt(0);
     }
+    _saveMessageHistory();
     notifyListeners();
   }
 

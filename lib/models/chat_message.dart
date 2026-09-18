@@ -58,6 +58,35 @@ class ChatMessage {
 
   @override
   int get hashCode => id.hashCode;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'messageText': messageText,
+        'fromNodeId': fromNodeId,
+        'fromNodeName': fromNodeName,
+        'timestamp': timestamp.toIso8601String(),
+        'channel': channel,
+        'toNodeId': toNodeId,
+        'isDirectMessage': isDirectMessage,
+        'isMine': isMine,
+        'deliveryStatus': deliveryStatus.name,
+      };
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
+        id: json['id'] as String?,
+        messageText: json['messageText'] as String,
+        fromNodeId: json['fromNodeId'] as int,
+        fromNodeName: json['fromNodeName'] as String,
+        timestamp: DateTime.parse(json['timestamp'] as String),
+        channel: json['channel'] as int,
+        toNodeId: json['toNodeId'] as int?,
+        isDirectMessage: json['isDirectMessage'] as bool,
+        isMine: json['isMine'] as bool,
+        deliveryStatus: DeliveryStatus.values.firstWhere(
+          (s) => s.name == json['deliveryStatus'],
+          orElse: () => DeliveryStatus.none,
+        ),
+      );
 }
 
 class MeshNode {
@@ -136,6 +165,34 @@ class VisitorRequest {
     final minute = exitTime!.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
+
+  Map<String, dynamic> toJson() => {
+        'requestId': requestId,
+        'visitorName': visitorName,
+        'reason': reason,
+        'area': area,
+        'fromNodeId': fromNodeId,
+        'fromNodeName': fromNodeName,
+        'timestamp': timestamp.toIso8601String(),
+        'isResponded': isResponded,
+        'responseStatus': responseStatus,
+        'exitTime': exitTime?.toIso8601String(),
+      };
+
+  factory VisitorRequest.fromJson(Map<String, dynamic> json) => VisitorRequest(
+        requestId: json['requestId'] as int,
+        visitorName: json['visitorName'] as String,
+        reason: json['reason'] as String,
+        area: json['area'] as String,
+        fromNodeId: json['fromNodeId'] as int,
+        fromNodeName: json['fromNodeName'] as String,
+        timestamp: DateTime.parse(json['timestamp'] as String),
+        isResponded: json['isResponded'] as bool? ?? false,
+        responseStatus: json['responseStatus'] as String?,
+        exitTime: json['exitTime'] != null
+            ? DateTime.parse(json['exitTime'] as String)
+            : null,
+      );
 }
 
 /// Respuesta a solicitud de visitante
@@ -186,6 +243,27 @@ class ActiveVisitor {
     final hour = exitTime!.hour.toString().padLeft(2, '0');
     final minute = exitTime!.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
+  }
+
+  Map<String, dynamic> toJson() => {
+        'visitorName': visitorName,
+        'reason': reason,
+        'area': area,
+        'entryTime': entryTime.toIso8601String(),
+        'exitTime': exitTime?.toIso8601String(),
+      };
+
+  factory ActiveVisitor.fromJson(Map<String, dynamic> json) {
+    final v = ActiveVisitor(
+      visitorName: json['visitorName'] as String,
+      reason: json['reason'] as String,
+      area: json['area'] as String,
+      entryTime: DateTime.parse(json['entryTime'] as String),
+    );
+    if (json['exitTime'] != null) {
+      v.exitTime = DateTime.parse(json['exitTime'] as String);
+    }
+    return v;
   }
 }
 

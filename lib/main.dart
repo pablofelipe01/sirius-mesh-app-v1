@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'services/meshtastic_service.dart';
 import 'screens/settings_screen.dart';
@@ -56,17 +57,15 @@ class _StartupScreenState extends State<StartupScreen> {
     if (savedAddress != null) {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (context) => MainScreen(
-            meshtasticService: _meshtasticService,
-          ),
+          builder: (context) =>
+              MainScreen(meshtasticService: _meshtasticService),
         ),
       );
     } else {
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (context) => DeviceSelectionScreen(
-            meshtasticService: _meshtasticService,
-          ),
+          builder: (context) =>
+              DeviceSelectionScreen(meshtasticService: _meshtasticService),
         ),
       );
     }
@@ -98,10 +97,7 @@ class _StartupScreenState extends State<StartupScreen> {
 class DeviceSelectionScreen extends StatefulWidget {
   final MeshtasticService meshtasticService;
 
-  const DeviceSelectionScreen({
-    super.key,
-    required this.meshtasticService,
-  });
+  const DeviceSelectionScreen({super.key, required this.meshtasticService});
 
   @override
   State<DeviceSelectionScreen> createState() => _DeviceSelectionScreenState();
@@ -140,7 +136,9 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
       final location = await Permission.locationWhenInUse.request();
 
       // Permiso legacy (no fallar si no aplica)
-      try { await Permission.bluetooth.request(); } catch (_) {}
+      try {
+        await Permission.bluetooth.request();
+      } catch (_) {}
 
       if (!bluetoothScan.isGranted) denied.add('Bluetooth Scan');
       if (!bluetoothConnect.isGranted) denied.add('Bluetooth Connect');
@@ -200,9 +198,8 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
 
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (context) => MainScreen(
-          meshtasticService: widget.meshtasticService,
-        ),
+        builder: (context) =>
+            MainScreen(meshtasticService: widget.meshtasticService),
       ),
     );
   }
@@ -224,8 +221,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
       ),
       body: Column(
         children: [
-          if (_isScanning)
-            const LinearProgressIndicator(),
+          if (_isScanning) const LinearProgressIndicator(),
           // Error de permisos
           if (_permissionError != null)
             Container(
@@ -289,7 +285,9 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          _isScanning ? Icons.bluetooth_searching : Icons.bluetooth_disabled,
+                          _isScanning
+                              ? Icons.bluetooth_searching
+                              : Icons.bluetooth_disabled,
                           size: 64,
                           color: Colors.grey,
                         ),
@@ -319,9 +317,14 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
                     itemBuilder: (context, index) {
                       final device = _devices[index];
                       return ListTile(
-                        leading: const Icon(Icons.bluetooth, color: Colors.blue),
+                        leading: const Icon(
+                          Icons.bluetooth,
+                          color: Colors.blue,
+                        ),
                         title: Text(
-                          device.name.isNotEmpty ? device.name : 'Dispositivo desconocido',
+                          device.name.isNotEmpty
+                              ? device.name
+                              : 'Dispositivo desconocido',
                           style: const TextStyle(fontWeight: FontWeight.w500),
                         ),
                         subtitle: Text(
@@ -347,10 +350,7 @@ class _DeviceSelectionScreenState extends State<DeviceSelectionScreen> {
 class MainScreen extends StatefulWidget {
   final MeshtasticService meshtasticService;
 
-  const MainScreen({
-    super.key,
-    required this.meshtasticService,
-  });
+  const MainScreen({super.key, required this.meshtasticService});
 
   @override
   State<MainScreen> createState() => _MainScreenState();
@@ -398,9 +398,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   void _navigateToDeviceSelection() {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (context) => DeviceSelectionScreen(
-          meshtasticService: _service,
-        ),
+        builder: (context) =>
+            DeviceSelectionScreen(meshtasticService: _service),
       ),
     );
   }
@@ -424,12 +423,69 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<bool> _confirmExit() async {
+    final activeCount = _service.activeVisitors.length;
+    final pendingCount = _service.pendingRequestsCount;
+
+    final extraInfo = <String>[];
+    if (activeCount > 0) {
+      extraInfo.add('$activeCount visitante${activeCount == 1 ? '' : 's'} activo${activeCount == 1 ? '' : 's'}');
+    }
+    if (pendingCount > 0) {
+      extraInfo.add('$pendingCount solicitud${pendingCount == 1 ? '' : 'es'} pendiente${pendingCount == 1 ? '' : 's'}');
+    }
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('¿Salir de la app?'),
+        content: Text(
+          extraInfo.isEmpty
+              ? 'La app dejará de recibir mensajes mientras esté cerrada.'
+              : 'Tienes ${extraInfo.join(' y ')}. '
+                  'Los datos quedan guardados, pero la app dejará de recibir mensajes mientras esté cerrada.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Salir'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
+  Future<void> _handlePopAttempt() async {
+    // Si no estamos en la pestaña Registro, ir ahí en vez de salir.
+    if (_currentIndex != 0) {
+      setState(() => _currentIndex = 0);
+      return;
+    }
+    // En Registro: pedir confirmación y luego cerrar la app.
+    final shouldExit = await _confirmExit();
+    if (shouldExit) {
+      await SystemNavigator.pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final pendingCount = _service.pendingRequestsCount;
     final unreadChat = _service.unreadChatCount;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        _handlePopAttempt();
+      },
+      child: Scaffold(
       body: _buildCurrentPage(),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
@@ -478,6 +534,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           ),
         ],
       ),
+      ),
     );
   }
 }
@@ -486,10 +543,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 class FormScreen extends StatefulWidget {
   final MeshtasticService meshtasticService;
 
-  const FormScreen({
-    super.key,
-    required this.meshtasticService,
-  });
+  const FormScreen({super.key, required this.meshtasticService});
 
   @override
   State<FormScreen> createState() => _FormScreenState();
@@ -519,7 +573,8 @@ class _FormScreenState extends State<FormScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedNode = _service.currentGatewayNode; // Gateway configurado por defecto
+    _selectedNode =
+        _service.currentGatewayNode; // Gateway configurado por defecto
     _service.addListener(_onConnectionChange);
     _responseSubscription = _service.responseStream.listen(_onResponse);
   }
@@ -616,9 +671,9 @@ class _FormScreenState extends State<FormScreen> {
   }
 
   void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _reconnect() async {
@@ -674,10 +729,7 @@ class _FormScreenState extends State<FormScreen> {
               SizedBox(height: 16),
               Text(
                 'Esperando respuesta...',
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
               ),
               SizedBox(height: 4),
               Text(
@@ -700,26 +752,26 @@ class _FormScreenState extends State<FormScreen> {
     final Color bgColor = isApproved
         ? Colors.green.shade50
         : isDenied
-            ? Colors.red.shade50
-            : Colors.orange.shade50;
+        ? Colors.red.shade50
+        : Colors.orange.shade50;
 
     final Color iconColor = isApproved
         ? Colors.green
         : isDenied
-            ? Colors.red
-            : Colors.orange;
+        ? Colors.red
+        : Colors.orange;
 
     final IconData icon = isApproved
         ? Icons.check_circle
         : isDenied
-            ? Icons.cancel
-            : Icons.pending;
+        ? Icons.cancel
+        : Icons.pending;
 
     final String statusText = isApproved
         ? 'APROBADO'
         : isDenied
-            ? 'NEGADO'
-            : 'PENDIENTE';
+        ? 'NEGADO'
+        : 'PENDIENTE';
 
     return Card(
       elevation: 4,
@@ -741,12 +793,10 @@ class _FormScreenState extends State<FormScreen> {
             const SizedBox(height: 8),
             Text(
               'Por: ${_response!.supervisorName}',
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-              ),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
             ),
-            if (_response!.comment != null && _response!.comment!.isNotEmpty) ...[
+            if (_response!.comment != null &&
+                _response!.comment!.isNotEmpty) ...[
               const SizedBox(height: 8),
               Container(
                 padding: const EdgeInsets.all(12),
@@ -792,7 +842,9 @@ class _FormScreenState extends State<FormScreen> {
   }
 
   Future<void> _registerVisitorExit(ActiveVisitor visitor) async {
-    final success = await _service.sendSalidaToGateway(visitorName: visitor.visitorName);
+    final success = await _service.sendSalidaToGateway(
+      visitorName: visitor.visitorName,
+    );
     if (success) {
       _service.markVisitorExited(visitor.visitorName);
       _showSnackBar('Salida registrada: ${visitor.visitorName}');
@@ -825,58 +877,73 @@ class _FormScreenState extends State<FormScreen> {
           ],
         ),
         const SizedBox(height: 8),
-        ...sorted.map((visitor) => Card(
-          elevation: 2,
-          color: visitor.hasExited ? Colors.grey.shade100 : Colors.green.shade50,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Icon(
-                  visitor.hasExited ? Icons.logout : Icons.person,
-                  color: visitor.hasExited ? Colors.grey : Colors.green,
-                  size: 28,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        visitor.visitorName,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                          decoration: visitor.hasExited ? TextDecoration.lineThrough : null,
-                        ),
-                      ),
-                      Text(
-                        '${visitor.area} — Entrada: ${visitor.formattedEntryTime}',
-                        style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-                      ),
-                      if (visitor.hasExited)
-                        Text(
-                          'Salida: ${visitor.formattedExitTime}',
-                          style: TextStyle(fontSize: 12, color: Colors.blue.shade700),
-                        ),
-                    ],
+        ...sorted.map(
+          (visitor) => Card(
+            elevation: 2,
+            color: visitor.hasExited
+                ? Colors.grey.shade100
+                : Colors.green.shade50,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(
+                    visitor.hasExited ? Icons.logout : Icons.person,
+                    color: visitor.hasExited ? Colors.grey : Colors.green,
+                    size: 28,
                   ),
-                ),
-                if (!visitor.hasExited)
-                  ElevatedButton.icon(
-                    onPressed: () => _registerVisitorExit(visitor),
-                    icon: const Icon(Icons.logout, size: 18),
-                    label: const Text('Salida'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          visitor.visitorName,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15,
+                            decoration: visitor.hasExited
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
+                        ),
+                        Text(
+                          '${visitor.area} — Entrada: ${visitor.formattedEntryTime}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                        if (visitor.hasExited)
+                          Text(
+                            'Salida: ${visitor.formattedExitTime}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blue.shade700,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-              ],
+                  if (!visitor.hasExited)
+                    ElevatedButton.icon(
+                      onPressed: () => _registerVisitorExit(visitor),
+                      icon: const Icon(Icons.logout, size: 18),
+                      label: const Text('Salida'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
-        )),
+        ),
       ],
     );
   }
@@ -888,11 +955,17 @@ class _FormScreenState extends State<FormScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Registro de Visitantes', style: TextStyle(fontSize: 18)),
+            const Text(
+              'Registro de Visitantes',
+              style: TextStyle(fontSize: 18),
+            ),
             if (_service.connectedDeviceName != null)
               Text(
                 _service.connectedDeviceName!,
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.normal,
+                ),
                 overflow: TextOverflow.ellipsis,
               ),
           ],
@@ -944,10 +1017,7 @@ class _FormScreenState extends State<FormScreen> {
                   prefixIcon: Icon(Icons.description),
                 ),
                 items: _reasons.map((reason) {
-                  return DropdownMenuItem(
-                    value: reason,
-                    child: Text(reason),
-                  );
+                  return DropdownMenuItem(value: reason, child: Text(reason));
                 }).toList(),
                 onChanged: (value) {
                   setState(() => _selectedReason = value!);
@@ -964,10 +1034,7 @@ class _FormScreenState extends State<FormScreen> {
                   prefixIcon: Icon(Icons.location_on),
                 ),
                 items: _areas.map((area) {
-                  return DropdownMenuItem(
-                    value: area,
-                    child: Text(area),
-                  );
+                  return DropdownMenuItem(value: area, child: Text(area));
                 }).toList(),
                 onChanged: (value) {
                   setState(() => _selectedArea = value!);
